@@ -10,6 +10,9 @@
 
 (function () {
   "use strict";
+  // The Android app may inject this more than once per page.
+  if (window.__calmgram) return;
+  window.__calmgram = true;
 
   // ---- Settings -----------------------------------------------------------
   const MAX_POSTS = 20;      // feed stops after this many posts
@@ -124,6 +127,7 @@
 
   route();
   injectCss();
+  if (document.body) tick();
   // Instagram is a single-page app: re-check on navigation and DOM changes.
   let scheduled = false;
   new MutationObserver(() => {
