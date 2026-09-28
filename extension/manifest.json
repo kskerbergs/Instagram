@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Calmgram",
+  "version": "1.0.0",
+  "description": "Instagram for friends only: their posts, stories and your DMs. No Reels, no Explore, no endless scroll.",
+  "content_scripts": [
+    {
+      "matches": ["https://www.instagram.com/*"],
+      "js": ["calmgram.user.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": { "id": "calmgram@kskerbergs", "strict_min_version": "109.0" }
+  }
+}
