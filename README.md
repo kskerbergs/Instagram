@@ -40,9 +40,14 @@ Or use the userscript method below with Tampermonkey or Violentmonkey.
 3. Open instagram.com in Safari, log in, and use it from there. Tip: Share → *Add to Home Screen*.
 4. Delete the Instagram app. This is the step that matters most.
 
-### Android
-Install **Firefox**, add the **Tampermonkey** add-on, and open `calmgram.user.js` in Tampermonkey.
-Then use instagram.com in Firefox instead of the app.
+### Android (app, no extra browser needed)
+1. On your phone, open
+   **https://github.com/kskerbergs/Instagram/releases/download/latest/Calmgram.apk**
+2. Open the downloaded file. If Android asks, allow your browser to *install unknown apps*.
+3. Open **Calmgram** and log in to Instagram.
+4. Uninstall the Instagram app.
+
+The app is instagram.com with the filter built in. It can't send push notifications, so open it to check messages.
 
 ## Settings
 The top of `extension/calmgram.user.js` has these settings:
