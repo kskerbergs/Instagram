@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Default Auto Backup: app data (including the WebView's saved visits) goes to the user's Google backup. -->
+<full-backup-content />

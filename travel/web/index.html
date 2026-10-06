@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="color-scheme" content="light dark">
+  <title>Wandermap</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main id="app">
+    <!-- Map tab -->
+    <section id="tab-map" class="tab active" aria-label="Map">
+      <canvas id="map" aria-label="World map. Use the Places tab for a list of every country."></canvas>
+      <div class="map-top">
+        <button id="counter" class="pill counter" aria-live="polite"></button>
+        <div class="seg small" role="tablist" aria-label="Map type">
+          <button data-mode="flat" class="on">2D</button>
+          <button data-mode="globe">3D</button>
+        </div>
+      </div>
+      <div class="map-tools">
+        <button id="map-filter" class="fab" aria-label="Map filters">⚲</button>
+        <button id="map-reset" class="fab" aria-label="Reset view">⤢</button>
+      </div>
+      <div id="anim-label" class="anim-label" hidden></div>
+      <div id="filter-bar" class="filter-bar" hidden></div>
+      <p class="map-hint">Tap a country for details · long-press to mark visited</p>
+    </section>
+
+    <!-- Places tab -->
+    <section id="tab-places" class="tab" aria-label="Places">
+      <header class="bar">
+        <div class="seg" id="places-kind" role="tablist">
+          <button data-kind="country" class="on">Countries</button>
+          <button data-kind="region">US states</button>
+        </div>
+        <input id="search" type="search" placeholder="Search" autocomplete="off" aria-label="Search places">
+        <div class="row-controls">
+          <select id="places-filter" aria-label="Filter">
+            <option value="all">All</option>
+            <option value="visited">Visited</option>
+            <option value="wishlist">Wishlist</option>
+            <option value="none">Not visited</option>
+          </select>
+          <select id="places-sort" aria-label="Sort">
+            <option value="az">A–Z</option>
+            <option value="date">By date</option>
+          </select>
+        </div>
+      </header>
+      <div id="places-list" class="scroll"></div>
+    </section>
+
+    <!-- Stats tab -->
+    <section id="tab-stats" class="tab" aria-label="Statistics">
+      <div id="stats" class="scroll padded"></div>
+    </section>
+
+    <!-- Profile tab -->
+    <section id="tab-profile" class="tab" aria-label="Profile and settings">
+      <div id="profile" class="scroll padded"></div>
+    </section>
+  </main>
+
+  <nav class="tabs" role="tablist">
+    <button data-tab="map" class="on"><span>🗺️</span>Map</button>
+    <button data-tab="places"><span>📋</span>Places</button>
+    <button data-tab="stats"><span>📊</span>Stats</button>
+    <button data-tab="profile"><span>👤</span>Profile</button>
+  </nav>
+
+  <!-- Shared Place sheet -->
+  <div id="sheet-backdrop" class="backdrop" hidden></div>
+  <div id="sheet" class="sheet" role="dialog" aria-modal="true" hidden>
+    <div class="grab"></div>
+    <div id="sheet-body"></div>
+  </div>
+
+  <!-- Full-screen overlays: regional map, compare, share, onboarding -->
+  <div id="screen" class="screen" hidden></div>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+
+  <script src="vendor/d3-array.min.js"></script>
+  <script src="vendor/d3-geo.min.js"></script>
+  <script src="vendor/d3-geo-projection.min.js"></script>
+  <script src="vendor/topojson-client.min.js"></script>
+  <script src="vendor/qrcode.js"></script>
+  <script src="data/places.js"></script>
+  <script src="data/world.js"></script>
+  <script src="data/globe.js"></script>
+  <script src="data/us.js"></script>
+  <script src="js/core.js"></script>
+  <script src="js/map.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

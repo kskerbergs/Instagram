@@ -1,0 +1,53 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "lv.wandermap"
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "lv.wandermap"
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName "1.0.0"
+    }
+
+    // The app UI is the offline web app in travel/web.
+    sourceSets {
+        main.assets.srcDirs += "../../web"
+    }
+
+    // A fixed key so each new APK installs over the previous one and keeps the user's data.
+    // It is a sideloading key kept in the repo, not a Play Store upload key.
+    signingConfigs {
+        sideload {
+            storeFile file("../wandermap.keystore")
+            storePassword "wandermap"
+            keyAlias "wandermap"
+            keyPassword "wandermap"
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.sideload
+        }
+        debug {
+            signingConfig signingConfigs.sideload
+        }
+    }
+
+    // Sideloaded build; skip the Play Store target-SDK checks that lintVital would fail on.
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}

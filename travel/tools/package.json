@@ -1,0 +1,19 @@
+{
+  "name": "wandermap-data",
+  "private": true,
+  "type": "module",
+  "description": "Builds the bundled reference data and vendored libraries for the Wandermap app",
+  "scripts": {
+    "build": "node build-data.mjs"
+  },
+  "devDependencies": {
+    "d3-array": "^3.2.4",
+    "d3-geo": "^3.1.1",
+    "d3-geo-projection": "^4.0.0",
+    "qrcode-generator": "^2.0.4",
+    "topojson-client": "^3.1.0",
+    "us-atlas": "^3.0.1",
+    "world-atlas": "^2.0.2",
+    "world-countries": "^5.1.0"
+  }
+}

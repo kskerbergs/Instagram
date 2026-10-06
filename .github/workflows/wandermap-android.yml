@@ -1,0 +1,54 @@
+name: Build Wandermap Android app
+
+on:
+  push:
+    paths:
+      - "travel/**"
+      - ".github/workflows/wandermap-android.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Unit tests (counting rules, share codes)
+        run: node --test travel/tests/core.test.mjs
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Build APK
+        working-directory: travel/android
+        run: gradle --no-daemon assembleRelease
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Wandermap-apk
+          path: travel/android/app/build/outputs/apk/release/app-release.apk
+
+      - name: Publish as the "wandermap-latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp travel/android/app/build/outputs/apk/release/app-release.apk Wandermap.apk
+          gh release delete wandermap-latest --yes --cleanup-tag || true
+          gh release create wandermap-latest Wandermap.apk \
+            --target "$GITHUB_SHA" \
+            --title "Wandermap for Android" \
+            --notes "Travel tracker. Download Wandermap.apk on your phone and open it to install." \
+            --latest=false
