@@ -131,10 +131,11 @@
       return d3.geoOrthographic().rotate(this.rotate).scale(r * this.globeScale).translate([this.w / 2, this.h / 2]).clipAngle(90);
     }
 
+    // Schedule a redraw; many changes in one frame (springs, gestures) still draw once.
     render() {
       if (!this.w) return;
-      cancelAnimationFrame(this.raf);
-      this.raf = requestAnimationFrame(() => this.draw());
+      if (!this.drawOnce) this.drawOnce = () => this.draw();
+      Motion.afterFrame(this.drawOnce);
     }
 
     draw() {
@@ -385,15 +386,50 @@
       this.render();
     }
 
+    // Animate the flat view to (k1, tx1, ty1) along one path. The map point that ends up at screen
+    // anchor S moves in a straight line to S while the zoom changes geometrically around it, so the
+    // place you tapped glides into position instead of swinging away and back.
+    animateView(k1, tx1, ty1, { anchor = [this.w / 2, this.h / 2], response = 0.55, onDone } = {}) {
+      const k0 = this.k;
+      const [sx, sy] = anchor;
+      const c = [(sx - tx1) / k1, (sy - ty1) / k1]; // map point that lands on the anchor
+      const p0 = [c[0] * k0 + this.tx, c[1] * k0 + this.ty]; // where it is on screen now
+      const anim = Motion.spring({
+        from: 0,
+        to: 1,
+        damping: 1,
+        response,
+        precision: 0.0005,
+        onUpdate: (t) => {
+          const k = k0 * Math.pow(k1 / k0, t);
+          this.k = k;
+          this.tx = p0[0] + (sx - p0[0]) * t - c[0] * k;
+          this.ty = p0[1] + (sy - p0[1]) * t - c[1] * k;
+          this.render();
+        },
+        onDone,
+      });
+      (this.anims ||= []).push(anim);
+      return anim;
+    }
+
     // Flat-map release: project where the flick is heading, then spring there carrying the finger's
     // velocity. X and Y are independent springs. A flick into an edge lands with a little bounce.
-    settleFlat(vx, vy) {
+    settleFlat(vx, vy, anchor) {
+      if (this.k < 1 || this.k > 40) {
+        const k = Math.max(1, Math.min(40, this.k));
+        const [ax, ay] = anchor || [this.w / 2, this.h / 2];
+        const [tx, ty] = this.bounds(ax - ((ax - this.tx) * k) / this.k, ay - ((ay - this.ty) * k) / this.k, k);
+        this.anims = [];
+        this.animateView(k, tx, ty, { anchor: [ax, ay], response: 0.4 });
+        return;
+      }
       const [px, py] = this.bounds(this.tx + Motion.project(vx), this.ty + Motion.project(vy));
       const hitEdge = Math.abs(px - (this.tx + Motion.project(vx))) > 1 || Math.abs(py - (this.ty + Motion.project(vy))) > 1;
       const opts = (v) => ({ velocity: v, damping: hitEdge ? 0.85 : 1, response: hitEdge ? 0.45 : 0.7 });
       this.anims = [
-        Motion.spring({ from: this.tx, to: px, ...opts(vx), onUpdate: (x) => ((this.tx = x), this.draw()) }),
-        Motion.spring({ from: this.ty, to: py, ...opts(vy), onUpdate: (y) => ((this.ty = y), this.draw()) }),
+        Motion.spring({ from: this.tx, to: px, ...opts(vx), onUpdate: (x) => ((this.tx = x), this.render()) }),
+        Motion.spring({ from: this.ty, to: py, ...opts(vy), onUpdate: (y) => ((this.ty = y), this.render()) }),
       ];
     }
 
@@ -420,8 +456,8 @@
       this.stopMotion();
       const r0 = this.rotate[0];
       this.anims = [
-        Motion.spring({ from: 0.86, to: this.globeScale || 1, damping: 1, response: 0.5, onUpdate: (v) => ((this.globeScale = v), this.draw()) }),
-        Motion.spring({ from: r0 + 30, to: r0, damping: 1, response: 0.6, onUpdate: (v) => ((this.rotate = [v, this.rotate[1]]), this.draw()) }),
+        Motion.spring({ from: 0.86, to: this.globeScale || 1, damping: 1, response: 0.5, precision: 0.001, onUpdate: (v) => ((this.globeScale = v), this.render()) }),
+        Motion.spring({ from: r0 + 30, to: r0, damping: 1, response: 0.6, onUpdate: (v) => ((this.rotate = [v, this.rotate[1]]), this.render()) }),
       ];
     }
 
@@ -434,11 +470,11 @@
       const to = [-target[0], -target[1]];
       if (to[0] - this.rotate[0] > 180) this.rotate[0] += 360;
       if (this.rotate[0] - to[0] > 180) this.rotate[0] -= 360;
-      const spring = (from, toV, set) => Motion.spring({ from, to: toV, damping: 1, response: 0.5, onUpdate: (v) => (set(v), this.draw()) });
+      const spring = (from, toV, set, precision = 0.05) => Motion.spring({ from, to: toV, damping: 1, response: 0.5, precision, onUpdate: (v) => (set(v), this.render()) });
       this.anims = [
         spring(this.rotate[0], to[0], (v) => (this.rotate = [v, this.rotate[1]])),
         spring(this.rotate[1], to[1], (v) => (this.rotate = [this.rotate[0], v])),
-        spring(this.globeScale, Math.max(2.5, this.globeScale), (v) => (this.globeScale = v)),
+        spring(this.globeScale, Math.max(2.5, this.globeScale), (v) => (this.globeScale = v), 0.001),
       ];
     }
 
@@ -451,6 +487,7 @@
       let tapTimer = null;
       let pressTimer = null;
       let pinch = null;
+      let lastMid = null;
       this.raw = [0, 0];
 
       const local = (e) => {
@@ -460,7 +497,7 @@
       const setPressed = (id) => {
         if (this.pressed === id) return;
         this.pressed = id;
-        this.draw();
+        this.render();
       };
 
       el.addEventListener("pointerdown", (e) => {
@@ -492,7 +529,8 @@
           moved = true;
           setPressed(null);
           const [a, b] = [...this.pointers.values()];
-          pinch = { d: Math.hypot(a[0] - b[0], a[1] - b[1]) };
+          pinch = { d: Math.hypot(a[0] - b[0], a[1] - b[1]), m: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2] };
+          this.saved = null; // the user took over the view; don't snap back when the sheet closes
         }
       });
 
@@ -504,8 +542,24 @@
         if (this.pointers.size === 2 && pinch) {
           const [a, b] = [...this.pointers.values()];
           const d = Math.hypot(a[0] - b[0], a[1] - b[1]);
-          if (pinch.d > 0) this.zoomAt(d / pinch.d, (a[0] + b[0]) / 2, (a[1] + b[1]) / 2);
+          const m = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+          if (pinch.d > 0) {
+            if (this.isGlobe()) {
+              this.zoomAt(d / pinch.d, m[0], m[1]);
+            } else {
+              // The spot between the fingers stays under the fingers: scale around the old midpoint,
+              // then follow the midpoint as it moves. No hard stops mid-gesture; it settles on release.
+              const k = Math.max(0.75, Math.min(48, (this.k * d) / pinch.d));
+              const f = k / this.k;
+              this.tx = pinch.m[0] - (pinch.m[0] - this.tx) * f + (m[0] - pinch.m[0]);
+              this.ty = pinch.m[1] - (pinch.m[1] - this.ty) * f + (m[1] - pinch.m[1]);
+              this.k = k;
+              this.render();
+            }
+          }
           pinch.d = d;
+          pinch.m = m;
+          lastMid = m;
           this.raw = [this.tx, this.ty];
           return;
         }
@@ -513,6 +567,7 @@
         vt.add(...p);
         if (!moved && Math.hypot(p[0] - start.p[0], p[1] - start.p[1]) > 8) {
           moved = true;
+          this.saved = null;
           clearTimeout(pressTimer);
           setPressed(null);
         }
@@ -559,7 +614,8 @@
         if (this.isGlobe()) {
           if (Math.hypot(v.x, v.y) > 30) this.inertia(v.x, v.y);
         } else {
-          this.settleFlat(v.x, v.y);
+          this.settleFlat(v.x, v.y, lastMid);
+          lastMid = null;
         }
       };
       el.addEventListener("pointerup", end);
@@ -579,7 +635,7 @@
       this.stopMotion();
       if (!this.saved) this.saved = { k: this.k, tx: this.tx, ty: this.ty, rotate: this.rotate.slice(), globeScale: this.globeScale };
       this.selected = id;
-      const fade = Motion.spring({ from: this.selectAmount || 0, to: 1, damping: 1, response: 0.3, onUpdate: (v) => ((this.selectAmount = v), this.draw()) });
+      const fade = Motion.spring({ from: this.selectAmount || 0, to: 1, damping: 1, response: 0.3, precision: 0.002, onUpdate: (v) => ((this.selectAmount = v), this.render()) });
       if (this.isGlobe()) {
         this.flyTo(id);
         this.anims.push(fade);
@@ -594,11 +650,14 @@
       const [[x0, y0], [x1, y1]] = box;
       const areaTop = this.h * visibleTop + 70;
       const areaH = this.h * (visibleBottom - visibleTop) - 90;
-      const k = Math.max(1, Math.min(14, (this.w * 0.72) / Math.max(1, x1 - x0), areaH / Math.max(1, y1 - y0)));
-      const tx = this.w / 2 - ((x0 + x1) / 2) * k;
-      const ty = areaTop + areaH / 2 - ((y0 + y1) / 2) * k;
-      const go = (from, to, set) => Motion.spring({ from, to, damping: 1, response: 0.5, onUpdate: (v) => (set(v), this.draw()) });
-      this.anims = [go(this.k, k, (v) => (this.k = v)), go(this.tx, tx, (v) => (this.tx = v)), go(this.ty, ty, (v) => (this.ty = v)), fade];
+      // Never zoom out to show a place, and cap the zoom for tiny ones so the jump stays gentle.
+      const fit = Math.min((this.w * 0.72) / Math.max(1, x1 - x0), areaH / Math.max(1, y1 - y0));
+      const k = Math.max(this.k, Math.min(10, fit));
+      const anchor = [this.w / 2, areaTop + areaH / 2];
+      const tx = anchor[0] - ((x0 + x1) / 2) * k;
+      const ty = anchor[1] - ((y0 + y1) / 2) * k;
+      this.anims = [fade];
+      this.animateView(k, tx, ty, { anchor, response: 0.55 });
     }
 
     unfocus() {
@@ -606,14 +665,15 @@
       this.stopMotion();
       const s = this.saved;
       this.saved = null;
-      const go = (from, to, set) => Motion.spring({ from, to, damping: 1, response: 0.5, onUpdate: (v) => (set(v), this.draw()) });
+      const go = (from, to, set) => Motion.spring({ from, to, damping: 1, response: 0.5, precision: 0.001, onUpdate: (v) => (set(v), this.render()) });
       this.anims = [
         Motion.spring({
           from: this.selectAmount || 0,
           to: 0,
           damping: 1,
           response: 0.25,
-          onUpdate: (v) => ((this.selectAmount = v), this.draw()),
+          precision: 0.002,
+          onUpdate: (v) => ((this.selectAmount = v), this.render()),
           onDone: () => (this.selected = null),
         }),
       ];
@@ -622,7 +682,7 @@
         this.anims.push(go(this.globeScale, s.globeScale, (v) => (this.globeScale = v)));
       } else {
         const [tx, ty] = this.bounds(s.tx, s.ty, s.k);
-        this.anims.push(go(this.k, s.k, (v) => (this.k = v)), go(this.tx, tx, (v) => (this.tx = v)), go(this.ty, ty, (v) => (this.ty = v)));
+        this.animateView(s.k, tx, ty, { response: 0.5 });
       }
     }
 
@@ -633,13 +693,10 @@
       this.initialView(this.opts.center && this.opts.center());
       const to = { k: this.k, tx: this.tx, ty: this.ty };
       [this.k, this.tx, this.ty] = [fromK, fromT[0], fromT[1]];
-      const go = (from, target, set) => Motion.spring({ from, to: target, damping: 1, response: 0.45, onUpdate: (v) => (set(v), this.draw()) });
       this.anims = [
-        go(this.k, to.k, (v) => (this.k = v)),
-        go(this.tx, to.tx, (v) => (this.tx = v)),
-        go(this.ty, to.ty, (v) => (this.ty = v)),
-        go(this.globeScale, 1, (v) => (this.globeScale = v)),
+        Motion.spring({ from: this.globeScale, to: 1, damping: 1, response: 0.45, precision: 0.001, onUpdate: (v) => ((this.globeScale = v), this.render()) }),
       ];
+      this.animateView(to.k, to.tx, to.ty, { response: 0.5 });
     }
   }
 

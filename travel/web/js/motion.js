@@ -5,16 +5,39 @@
 
   const reduceMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+  // ---- One clock for every animation --------------------------------------------
+  // All springs step in a single requestAnimationFrame, then "after frame" callbacks run once each.
+  // A map animating zoom, x and y redraws once per frame, not once per spring.
+  const active = new Set();
+  const after = new Set();
+  let raf = 0;
+  function frame(now) {
+    raf = 0;
+    for (const s of [...active]) s.step(now);
+    const cbs = [...after];
+    after.clear();
+    for (const cb of cbs) cb();
+    if ((active.size || after.size) && !raf) raf = requestAnimationFrame(frame);
+  }
+  function kick() {
+    if (!raf) raf = requestAnimationFrame(frame);
+  }
+  // Run cb once at the end of the current (or next) frame, after all springs have moved.
+  function afterFrame(cb) {
+    after.add(cb);
+    kick();
+  }
+
   // Spring described the way Apple does: damping ratio (1 = no overshoot) and response (seconds).
   // Animates from the current value with an initial velocity (units/s); stop() leaves the value where it is.
-  function spring({ from, to, velocity = 0, damping = 1, response = 0.35, onUpdate, onDone }) {
+  // precision: how close counts as arrived, in the value's own units (pixels by default; use small
+  // values for zoom factors or 0..1 progress so nothing snaps at the end).
+  function spring({ from, to, velocity = 0, damping = 1, response = 0.35, precision = 0.25, onUpdate, onDone }) {
     const k = Math.pow((2 * Math.PI) / response, 2);
     const c = (4 * Math.PI * damping) / response;
     let x = from;
     let v = velocity;
-    let last = performance.now();
-    let raf = 0;
-    let stopped = false;
+    let last = null;
     const handle = {
       get value() {
         return x;
@@ -23,8 +46,29 @@
         return v;
       },
       stop() {
-        stopped = true;
-        cancelAnimationFrame(raf);
+        active.delete(handle);
+      },
+      step(now) {
+        if (last === null) last = now - 16;
+        let dt = Math.min(0.064, (now - last) / 1000);
+        last = now;
+        // Fixed sub-steps keep stiff springs stable.
+        while (dt > 0) {
+          const h = Math.min(dt, 1 / 240);
+          const a = -k * (x - to) - c * v;
+          v += a * h;
+          x += v * h;
+          dt -= h;
+        }
+        if (Math.abs(x - to) < precision && Math.abs(v) < precision * 20) {
+          x = to;
+          v = 0;
+          active.delete(handle);
+          onUpdate(x);
+          onDone && onDone();
+          return;
+        }
+        onUpdate(x);
       },
     };
     if (reduceMotion()) {
@@ -33,29 +77,8 @@
       onDone && onDone();
       return handle;
     }
-    const step = (now) => {
-      if (stopped) return;
-      let dt = Math.min(0.064, (now - last) / 1000);
-      last = now;
-      // Fixed sub-steps keep stiff springs stable.
-      while (dt > 0) {
-        const h = Math.min(dt, 1 / 240);
-        const a = -k * (x - to) - c * v;
-        v += a * h;
-        x += v * h;
-        dt -= h;
-      }
-      if (Math.abs(x - to) < 0.3 && Math.abs(v) < 6) {
-        x = to;
-        v = 0;
-        onUpdate(x);
-        onDone && onDone();
-        return;
-      }
-      onUpdate(x);
-      raf = requestAnimationFrame(step);
-    };
-    raf = requestAnimationFrame(step);
+    active.add(handle);
+    kick();
     return handle;
   }
 
@@ -316,5 +339,5 @@
     all();
   }
 
-  window.Motion = { spring, project, rubberband, tracker, haptic, Sheet, Pager, watchSegs, reduceMotion };
+  window.Motion = { afterFrame, spring, project, rubberband, tracker, haptic, Sheet, Pager, watchSegs, reduceMotion };
 })();
