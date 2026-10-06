@@ -164,6 +164,7 @@
       muted: v("--muted"),
       bg: v("--bg"),
       surface: v("--surface"),
+      select: v("--map-select"),
     };
   }
   let theme = null;
@@ -180,7 +181,8 @@
 
   function setStatus(type, id, status) {
     const list = visitsFor(type, id);
-    Motion.haptic(10);
+    // Accepting a new place gets a fuller "tick-tock"; other changes a light tick.
+    Motion.haptic(Core.counts(status) && !Core.counts(statusOf(type, id)) ? [12, 60, 18] : 10);
     ui.justChanged = type + ":" + id;
     if (!status) {
       if (!list.length) return;
@@ -368,6 +370,7 @@
       onTap: (id) => {
         if (ui.anim) return stopAnimation();
         openSheet("country", id);
+        focusOn(worldMap, id);
       },
       onLongPress: (id) => quickToggle("country", id),
       fillHeight: true,
@@ -614,8 +617,20 @@
   }
 
   // ---- Place sheet ---------------------------------------------------------------
+  // Zoom the map to the place in the space left above the sheet.
+  function focusOn(map, id) {
+    const sheet = $("#sheet");
+    const visible = Math.min(sheet.offsetHeight, window.innerHeight * 0.55);
+    map.focus(id, { visibleTop: 0, visibleBottom: (window.innerHeight - visible) / map.h });
+  }
+
   const sheetCtl = Motion.Sheet($("#sheet"), $("#sheet-backdrop"), $("#sheet"), {
     handle: ".sheet-top",
+    onClosing: () => {
+      document.body.classList.remove("sheet-open");
+      worldMap?.unfocus();
+      regionMap?.unfocus();
+    },
     onClosed: () => {
       if (!ui.sheet) $("#sheet-body").innerHTML = "";
     },
@@ -625,6 +640,7 @@
     ui.sheet = { type, id, editing: null };
     renderSheet();
     sheetCtl.open();
+    document.body.classList.add("sheet-open");
   }
 
   function closeSheet() {
@@ -652,17 +668,39 @@
       const r = REGION.get(id);
       sub = `${r.type[0].toUpperCase() + r.type.slice(1)} · <button class="btn link" data-parent="${r.country}">${esc(COUNTRY.get(r.country).name)}</button>`;
     }
-    const statusBtns = [
-      ["visited", "Visited", "✓"],
-      ["lived", "Lived", "⌂"],
-      ["wishlist", "Wishlist", "★"],
-      [null, "Clear", "✕"],
-    ]
-      .map(([s, label, icon]) => `<button data-status="${s || ""}" class="${s && st === s ? "on " + s + (ui.justChanged === type + ":" + id ? " pop" : "") : ""}" aria-pressed="${s && st === s}"><i aria-hidden="true">${icon}</i>${label}</button>`)
-      .join("");
+    const dated = visits.some((v) => v.first || v.note);
+    // One clear decision first: "I've been here". Once accepted, the finer choices appear.
+    const just = ui.justChanged === type + ":" + id;
+    const name = esc(placeName(type, id));
+    let statusBlock;
+    if (Core.counts(st)) {
+      const first = visits.map((v) => v.first).filter(Boolean).sort()[0];
+      statusBlock = `
+        <div class="been-done${just ? " celebrate" : ""}" role="status">
+          <span class="been-check" aria-hidden="true">✓</span>
+          <div><b>${st === "lived" ? "You lived here" : "You've been here"}</b><small>${first ? "First visit " + esc(fmtDate(first)) : "On your map"}</small></div>
+        </div>
+        <div class="seg been-seg" role="radiogroup" aria-label="Status">
+          <button data-status="visited" class="${st === "visited" ? "on" : ""}" aria-pressed="${st === "visited"}">Visited</button>
+          <button data-status="lived" class="${st === "lived" ? "on" : ""}" aria-pressed="${st === "lived"}">Lived here</button>
+        </div>
+        ${!dated && !editing ? `<button class="btn block been-when" data-add>When were you there? Add dates</button>` : ""}`;
+    } else {
+      statusBlock = `
+        <button class="been-btn" data-status="visited"><span aria-hidden="true">✓</span> I've been here</button>
+        <div class="been-alt">
+          <button class="btn" data-status="lived">Lived here</button>
+          ${
+            st === "wishlist"
+              ? `<button class="btn on-wish${just ? " pop" : ""}" data-status="" aria-pressed="true">★ On wishlist</button>`
+              : `<button class="btn" data-status="wishlist">☆ Want to go</button>`
+          }
+        </div>`;
+    }
 
-    const visitRows = visits.length
+    const visitRows = visits.some((v) => v.first || v.note)
       ? visits
+          .filter((v) => v.first || v.note)
           .map(
             (v) => `<div class="visit"><div><b>${esc(fmtRange(v))}</b><small>${esc(v.status)}${v.note ? " · " + esc(v.note) : ""}</small></div>
             <button class="btn link" data-edit="${v.id}">Edit</button></div>`,
@@ -679,13 +717,18 @@
           <div style="flex:1;min-width:0"><h2>${esc(placeName(type, id))}</h2><small>${sub}</small></div>
           <button class="icon-btn" data-close-sheet aria-label="Close">✕</button>
         </div>
-        <div class="status-row">${statusBtns}</div>
+        ${statusBlock}
       </div>
       <div class="sheet-scroll">
         ${extra}
-        <h3>Visits</h3>
-        <div class="list">${visitRows}${editing ? visitForm(visits.find((v) => v.id === editing)) : ""}</div>
-        ${editing ? "" : `<div class="section" style="margin-top:0.75rem"><button class="btn block" data-add>Add a visit with dates</button></div>`}
+        ${
+          dated || editing
+            ? `<h3>Visits</h3>
+        <div class="list">${dated ? visitRows : ""}${editing ? visitForm(visits.find((v) => v.id === editing)) : ""}</div>
+        ${editing ? "" : `<div class="section" style="margin-top:0.75rem"><button class="btn block" data-add>Add another visit</button></div>`}`
+            : ""
+        }
+        ${Core.counts(st) ? `<div class="section" style="margin-top:0.5rem"><button class="btn link block" data-status="" style="color:var(--danger)">Remove ${name} from my map</button></div>` : ""}
       </div>
     `;
     $(".sheet-scroll").scrollTop = keepScroll;
@@ -693,10 +736,12 @@
     const body = $("#sheet-body");
     $("[data-close-sheet]", body).addEventListener("click", closeSheet);
     $$("[data-status]", body).forEach((b) => b.addEventListener("click", () => setStatus(type, id, b.dataset.status || null)));
-    $("[data-add]", body)?.addEventListener("click", () => {
-      ui.sheet.editing = "new";
-      renderSheet();
-    });
+    $$("[data-add]", body).forEach((b) =>
+      b.addEventListener("click", () => {
+        ui.sheet.editing = "new";
+        renderSheet();
+      }),
+    );
     $$("[data-edit]", body).forEach((b) =>
       b.addEventListener("click", () => {
         ui.sheet.editing = b.dataset.edit;
@@ -785,7 +830,10 @@
           countries: COUNTRIES,
           theme: () => theme,
           style: (id) => faded("region:" + id, regionStyle(id)),
-          onTap: (id) => openSheet("region", id),
+          onTap: (id) => {
+            openSheet("region", id);
+            focusOn(regionMap, id);
+          },
           onLongPress: (id) => quickToggle("region", id),
         });
         this.refresh();

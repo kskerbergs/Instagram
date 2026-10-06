@@ -17,6 +17,7 @@
   --graticule: rgba(0, 0, 0, 0.05);
   --dot: #9ca3af;
   --dot-stroke: #ffffff;
+  --map-select: rgba(0, 122, 255, 0.28);
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06), 0 4px 12px rgba(0, 0, 0, 0.08);
   --shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.18);
   --nav-h: 3.5rem;
@@ -43,6 +44,7 @@
   --graticule: rgba(255, 255, 255, 0.05);
   --dot: #636366;
   --dot-stroke: #000000;
+  --map-select: rgba(10, 132, 255, 0.4);
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
   --shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.6);
   color-scheme: dark;
@@ -66,6 +68,7 @@
     --graticule: rgba(255, 255, 255, 0.05);
     --dot: #636366;
     --dot-stroke: #000000;
+    --map-select: rgba(10, 132, 255, 0.4);
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
     --shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.6);
     color-scheme: dark;
@@ -186,7 +189,7 @@ input:focus-visible, select:focus-visible { box-shadow: 0 0 0 3px color-mix(in s
 .empty { padding: 2rem 1rem; text-align: center; color: var(--muted); }
 
 /* Sheet: a thick material surface; dims the content behind it. */
-.backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.32); z-index: 30; opacity: 0; }
+.backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.12); z-index: 30; opacity: 0; }
 .sheet {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 31; max-height: 92vh;
   display: flex; flex-direction: column;
@@ -373,3 +376,38 @@ canvas.morph { animation: morph 0.38s var(--ease-out); }
 
 /* Map overlays fade with the sheet instead of disappearing. */
 .map-hint { transition: opacity 0.3s; }
+
+/* ---- "I've been here" ---- */
+.been-btn {
+  display: flex; align-items: center; justify-content: center; gap: 0.5rem; width: 100%;
+  margin: 1rem 0 0.6rem; padding: 1rem; border: 0; border-radius: 16px;
+  background: var(--pc); color: #fff; font-size: 1.1875rem; font-weight: 700; letter-spacing: -0.015em;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--pc) 35%, transparent);
+  transition: transform 0.18s var(--ease-out), box-shadow 0.2s;
+}
+.been-btn span { font-size: 1.3rem; }
+.been-btn:active { transform: scale(0.97); box-shadow: 0 3px 10px color-mix(in srgb, var(--pc) 30%, transparent); transition-duration: 0.08s; }
+.been-alt { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.25rem; }
+.been-alt .btn { font-size: 0.9375rem; color: var(--text); background: var(--surface); box-shadow: var(--shadow-sm); }
+.been-alt .btn.on-wish { color: var(--pc); box-shadow: inset 0 0 0 2px var(--pc); }
+
+.been-done { display: flex; align-items: center; gap: 0.85rem; margin: 1rem 0 0.75rem; padding: 0.85rem 1rem; border-radius: 16px; background: var(--surface); box-shadow: var(--shadow-sm); }
+.been-done b { font-size: 1.125rem; font-weight: 700; letter-spacing: -0.015em; display: block; }
+.been-done small { color: var(--muted); font-size: 0.875rem; }
+.been-check { width: 2.6rem; height: 2.6rem; border-radius: 50%; flex: none; display: grid; place-items: center; background: var(--pc); color: #fff; font-size: 1.35rem; font-weight: 800; }
+.been-seg { display: flex; margin-bottom: 0.25rem; }
+.been-seg button { flex: 1; }
+.been-when { margin-top: 0.6rem; }
+
+/* The moment of acceptance: the check springs in, a ring ripples out, the card settles. */
+@keyframes check-in { 0% { transform: scale(0.2) rotate(-25deg); opacity: 0; } 55% { transform: scale(1.18) rotate(4deg); opacity: 1; } 100% { transform: scale(1) rotate(0); } }
+@keyframes ripple { from { box-shadow: 0 0 0 0 color-mix(in srgb, var(--pc) 55%, transparent); } to { box-shadow: 0 0 0 18px transparent; } }
+@keyframes card-in { from { transform: scale(0.94); opacity: 0.4; } }
+.been-done.celebrate { animation: card-in 0.45s var(--ease-pop); }
+.been-done.celebrate .been-check { animation: check-in 0.55s var(--ease-pop), ripple 0.8s ease-out 0.2s; }
+.been-done.celebrate b { animation: rise 0.4s var(--ease-out) 0.08s both; }
+.been-done.celebrate small { animation: rise 0.4s var(--ease-out) 0.14s both; }
+.been-when { animation: rise 0.4s var(--ease-out) 0.2s both; }
+
+/* While the sheet is up, toasts drop in from the top so they never cover its buttons. */
+body.sheet-open .toast { bottom: auto; top: calc(var(--safe-t) + 0.75rem); }

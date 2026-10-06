@@ -103,7 +103,7 @@
 
   // ---- Bottom sheet with detents -------------------------------------------------
   // y is the sheet's offset from fully open (0). Detents: full, medium (if the content is tall), closed.
-  function Sheet(el, backdrop, handleEl, { onClosed, handle }) {
+  function Sheet(el, backdrop, handleEl, { onClosed, onClosing, handle }) {
     let y = 0;
     let anim = null;
     let open = false;
@@ -125,6 +125,7 @@
     };
     const settle = (target, velocity, momentum) => {
       anim?.stop();
+      if (target >= closedY() - 1 && onClosing) onClosing();
       anim = spring({
         from: y,
         to: target,

@@ -19,6 +19,7 @@ Every build is signed with the same key, so a new APK installs over the old one 
 |---|---|
 | Map | 2D map (Robinson projection) and 3D globe; tap a country for details, long-press to toggle visited; pinch-zoom, pan, globe inertia, double-tap the globe to fly to a country; microstates drawn as tappable dots; filters by status, continent and year range |
 | Places | Countries grouped by continent with "12 / 44" counts; US states (50 + DC, territories optional); search, filter, sort |
+| Tap a country | The map zooms to it, outlines and tints it, and dims the rest. A big **I've been here** button adds it (with a check animation and haptic). Then you can switch to *Lived here*, add dates, or remove it. Closing the sheet glides the map back |
 | Place sheet | One sheet everywhere: Visited / Lived / Wishlist / Clear, dated visits (month or exact day, optional end date, note), link to the US states map |
 | Stats | World % by count and by land area, continent bars, US states, first and latest trip, most-visited country, timeline by year with a ▶ chronological map animation, achievements |
 | Share | 1080×1350 or 1080×1920 PNG (map, map + stats, continents, year in travel; light or dark) to the Android share sheet or saved to Pictures |

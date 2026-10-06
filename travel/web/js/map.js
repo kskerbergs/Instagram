@@ -147,6 +147,31 @@
         ctx.fill(f.path);
         ctx.stroke(f.path);
       }
+      if (this.selected) {
+        const sel = this.flatPaths.find((f) => f.id === this.selected && f.path);
+        const a = this.selectAmount || 0;
+        if (sel && a > 0) {
+          // Dim everything else a little so the chosen place stands out.
+          ctx.save();
+          ctx.globalAlpha = 0.28 * a;
+          ctx.fillStyle = theme.ocean;
+          ctx.fillRect(-this.tx / k, -this.ty / k, this.w / k, this.h / k);
+          ctx.restore();
+          applyStyle(ctx, this.opts.style(sel.id), k);
+          ctx.fill(sel.path);
+          // Tint the chosen place with the accent so it reads as selected, visited or not.
+          ctx.globalAlpha = a;
+          ctx.fillStyle = theme.select;
+          ctx.fill(sel.path);
+          ctx.globalAlpha = 1;
+          ctx.lineJoin = "round";
+          ctx.lineWidth = (2.5 * a) / k;
+          ctx.strokeStyle = theme.text;
+          ctx.stroke(sel.path);
+          ctx.lineWidth = 0.6 / k;
+          ctx.strokeStyle = theme.border;
+        }
+      }
       if (this.pressed) {
         for (const f of this.flatPaths) {
           if (f.id !== this.pressed || !f.path) continue;
@@ -190,6 +215,18 @@
         ctx.fill();
         ctx.stroke();
       }
+      if (this.selected && (this.selectAmount || 0) > 0) {
+        ctx.beginPath();
+        for (const f of globeFeatures) if (f.id === this.selected) path(f);
+        ctx.globalAlpha = this.selectAmount;
+        ctx.fillStyle = theme.select;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.lineJoin = "round";
+        ctx.lineWidth = 2.5 * this.selectAmount;
+        ctx.strokeStyle = theme.text;
+        ctx.stroke();
+      }
       if (this.pressed) {
         ctx.beginPath();
         for (const f of globeFeatures) if (f.id === this.pressed) path(f);
@@ -227,8 +264,9 @@
         ctx.globalAlpha = plain ? 0.7 : 1;
         ctx.fill();
         ctx.globalAlpha = 1;
-        ctx.lineWidth = d.id === this.pressed ? 3 : 1;
-        ctx.strokeStyle = d.id === this.pressed ? theme.text : theme.dotStroke;
+        const ring = d.id === this.pressed || d.id === this.selected;
+        ctx.lineWidth = ring ? 3 : 1;
+        ctx.strokeStyle = ring ? theme.text : theme.dotStroke;
         ctx.stroke();
       }
     }
@@ -515,6 +553,59 @@
         const [x, y] = local(e);
         this.zoomAt(Math.exp(-e.deltaY * 0.002), x, y);
       }, { passive: false });
+    }
+
+    // "Open up" a place: zoom so it fills the space above the sheet, outline it, dim the rest.
+    // The view before is remembered so unfocus() can glide back to it.
+    focus(id, { visibleTop = 0, visibleBottom = 0.5 } = {}) {
+      this.stopMotion();
+      if (!this.saved) this.saved = { k: this.k, tx: this.tx, ty: this.ty, rotate: this.rotate.slice(), globeScale: this.globeScale };
+      this.selected = id;
+      const fade = Motion.spring({ from: this.selectAmount || 0, to: 1, damping: 1, response: 0.3, onUpdate: (v) => ((this.selectAmount = v), this.draw()) });
+      if (this.isGlobe()) {
+        this.flyTo(id);
+        this.anims.push(fade);
+        return;
+      }
+      let box = this.flatPaths.find((f) => f.id === id && f.bounds)?.bounds;
+      if (!box) {
+        const d = this.flatDots.find((x) => x.id === id);
+        if (!d) return void (this.anims = [fade]);
+        box = [[d.p[0] - 3, d.p[1] - 3], [d.p[0] + 3, d.p[1] + 3]];
+      }
+      const [[x0, y0], [x1, y1]] = box;
+      const areaTop = this.h * visibleTop + 70;
+      const areaH = this.h * (visibleBottom - visibleTop) - 90;
+      const k = Math.max(1, Math.min(14, (this.w * 0.72) / Math.max(1, x1 - x0), areaH / Math.max(1, y1 - y0)));
+      const tx = this.w / 2 - ((x0 + x1) / 2) * k;
+      const ty = areaTop + areaH / 2 - ((y0 + y1) / 2) * k;
+      const go = (from, to, set) => Motion.spring({ from, to, damping: 1, response: 0.5, onUpdate: (v) => (set(v), this.draw()) });
+      this.anims = [go(this.k, k, (v) => (this.k = v)), go(this.tx, tx, (v) => (this.tx = v)), go(this.ty, ty, (v) => (this.ty = v)), fade];
+    }
+
+    unfocus() {
+      if (!this.selected) return;
+      this.stopMotion();
+      const s = this.saved;
+      this.saved = null;
+      const go = (from, to, set) => Motion.spring({ from, to, damping: 1, response: 0.5, onUpdate: (v) => (set(v), this.draw()) });
+      this.anims = [
+        Motion.spring({
+          from: this.selectAmount || 0,
+          to: 0,
+          damping: 1,
+          response: 0.25,
+          onUpdate: (v) => ((this.selectAmount = v), this.draw()),
+          onDone: () => (this.selected = null),
+        }),
+      ];
+      if (!s) return;
+      if (this.isGlobe()) {
+        this.anims.push(go(this.globeScale, s.globeScale, (v) => (this.globeScale = v)));
+      } else {
+        const [tx, ty] = this.bounds(s.tx, s.ty, s.k);
+        this.anims.push(go(this.k, s.k, (v) => (this.k = v)), go(this.tx, tx, (v) => (this.tx = v)), go(this.ty, ty, (v) => (this.ty = v)));
+      }
     }
 
     resetView() {
