@@ -44,11 +44,24 @@ jobs:
       - name: Publish as the "wandermap-latest" release
         env:
           GH_TOKEN: ${{ github.token }}
+          TITLE: Wandermap for Android 1.0.${{ github.run_number }}
+          NOTES: Wandermap 1.0.${{ github.run_number }}. Download Wandermap.apk on your phone and open it to install; it updates the app already on your phone and keeps your data.
         run: |
           cp travel/android/app/build/outputs/apk/release/app-release.apk Wandermap.apk
-          gh release delete wandermap-latest --yes --cleanup-tag || true
-          gh release create wandermap-latest Wandermap.apk \
-            --target "$GITHUB_SHA" \
-            --title "Wandermap for Android 1.0.${{ github.run_number }}" \
-            --notes "Wandermap 1.0.${{ github.run_number }}. Download Wandermap.apk on your phone and open it to install; it updates the app already on your phone and keeps your data." \
-            --latest=false
+          # Update the release in place (never delete it first), so the download link always works,
+          # and retry, because GitHub's upload API fails now and then.
+          publish() {
+            if gh release view wandermap-latest > /dev/null 2>&1; then
+              gh release upload wandermap-latest Wandermap.apk --clobber &&
+              gh release edit wandermap-latest --title "$TITLE" --notes "$NOTES" --draft=false --latest=false
+            else
+              gh release create wandermap-latest Wandermap.apk --target "$GITHUB_SHA" \
+                --title "$TITLE" --notes "$NOTES" --latest=false
+            fi
+          }
+          for attempt in 1 2 3 4; do
+            publish && exit 0
+            echo "Publish attempt $attempt failed; retrying"
+            sleep $((attempt * 10))
+          done
+          exit 1
