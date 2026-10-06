@@ -73,7 +73,7 @@
 
     setMode(mode) {
       this.mode = mode;
-      this.velocity = null;
+      this.stopMotion();
       this.render();
     }
 
@@ -147,6 +147,15 @@
         ctx.fill(f.path);
         ctx.stroke(f.path);
       }
+      if (this.pressed) {
+        for (const f of this.flatPaths) {
+          if (f.id !== this.pressed || !f.path) continue;
+          ctx.globalAlpha = 0.22;
+          ctx.fillStyle = theme.text;
+          ctx.fill(f.path);
+          ctx.globalAlpha = 1;
+        }
+      }
       ctx.restore();
       this.drawDots(this.flatDots.map((d) => ({ id: d.id, x: d.p[0] * k + this.tx, y: d.p[1] * k + this.ty })), theme);
     }
@@ -181,6 +190,14 @@
         ctx.fill();
         ctx.stroke();
       }
+      if (this.pressed) {
+        ctx.beginPath();
+        for (const f of globeFeatures) if (f.id === this.pressed) path(f);
+        ctx.globalAlpha = 0.22;
+        ctx.fillStyle = theme.text;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
       ctx.beginPath();
       path({ type: "Sphere" });
       ctx.strokeStyle = theme.border;
@@ -210,8 +227,8 @@
         ctx.globalAlpha = plain ? 0.7 : 1;
         ctx.fill();
         ctx.globalAlpha = 1;
-        ctx.lineWidth = 1;
-        ctx.strokeStyle = theme.dotStroke;
+        ctx.lineWidth = d.id === this.pressed ? 3 : 1;
+        ctx.strokeStyle = d.id === this.pressed ? theme.text : theme.dotStroke;
         ctx.stroke();
       }
     }
@@ -246,20 +263,23 @@
     }
 
     // ---- Gestures -----------------------------------------------------------
-    // Keep the map on screen: centre an axis that fits, otherwise don't pan past its edges.
-    clampFlat() {
-      this.k = Math.max(1, Math.min(this.k, 40));
+    // Where tx/ty must be for the map to stay on screen: centre an axis that fits, else no gap at the edges.
+    bounds(tx, ty, k = this.k) {
       const [[x0, y0], [x1, y1]] = this.content;
       const fit = (t, a0, a1, size) => {
-        const lo = a0 * this.k + t;
-        const hi = a1 * this.k + t;
-        if (hi - lo <= size) return (size - (a1 - a0) * this.k) / 2 - a0 * this.k;
+        const lo = a0 * k + t;
+        const hi = a1 * k + t;
+        if (hi - lo <= size) return (size - (a1 - a0) * k) / 2 - a0 * k;
         if (lo > 0) return t - lo;
         if (hi < size) return t + (size - hi);
         return t;
       };
-      this.tx = fit(this.tx, x0, x1, this.w);
-      this.ty = fit(this.ty, y0, y1, this.h);
+      return [fit(tx, x0, x1, this.w), fit(ty, y0, y1, this.h)];
+    }
+
+    clampFlat() {
+      this.k = Math.max(1, Math.min(this.k, 40));
+      [this.tx, this.ty] = this.bounds(this.tx, this.ty);
     }
 
     // Portrait phones: open zoomed in so the map fills most of the height, centred on a place.
@@ -273,8 +293,18 @@
       this.clampFlat();
     }
 
+    isGlobe() {
+      return this.mode === "globe" && this.region === "world";
+    }
+
+    stopMotion() {
+      for (const a of this.anims || []) a.stop();
+      this.anims = [];
+      this.inertiaOn = false;
+    }
+
     zoomAt(factor, x, y) {
-      if (this.mode === "globe" && this.region === "world") {
+      if (this.isGlobe()) {
         this.globeScale = Math.max(0.6, Math.min(this.globeScale * factor, 12));
       } else {
         const k = Math.max(1, Math.min(this.k * factor, 40));
@@ -286,16 +316,59 @@
       this.render();
     }
 
+    // Raw pan: the globe rotates 1:1; the flat map follows the finger and rubber-bands past its edges.
     panBy(dx, dy) {
-      if (this.mode === "globe" && this.region === "world") {
-        const deg = 90 / (this.globeProjection().scale() || 1) * 1.2;
-        this.rotate = [this.rotate[0] + dx * deg * 0.9, Math.max(-85, Math.min(85, this.rotate[1] - dy * deg * 0.9))];
+      if (this.isGlobe()) {
+        const deg = (90 / (this.globeProjection().scale() || 1)) * 1.08;
+        this.rotate = [this.rotate[0] + dx * deg, Math.max(-85, Math.min(85, this.rotate[1] - dy * deg))];
       } else {
-        this.tx += dx;
-        this.ty += dy;
-        this.clampFlat();
+        this.raw[0] += dx;
+        this.raw[1] += dy;
+        const [cx, cy] = this.bounds(this.raw[0], this.raw[1]);
+        this.tx = cx + Motion.rubberband(this.raw[0] - cx, this.w);
+        this.ty = cy + Motion.rubberband(this.raw[1] - cy, this.h);
       }
       this.render();
+    }
+
+    // Flat-map release: project where the flick is heading, then spring there carrying the finger's
+    // velocity. X and Y are independent springs. A flick into an edge lands with a little bounce.
+    settleFlat(vx, vy) {
+      const [px, py] = this.bounds(this.tx + Motion.project(vx), this.ty + Motion.project(vy));
+      const hitEdge = Math.abs(px - (this.tx + Motion.project(vx))) > 1 || Math.abs(py - (this.ty + Motion.project(vy))) > 1;
+      const opts = (v) => ({ velocity: v, damping: hitEdge ? 0.85 : 1, response: hitEdge ? 0.45 : 0.7 });
+      this.anims = [
+        Motion.spring({ from: this.tx, to: px, ...opts(vx), onUpdate: (x) => ((this.tx = x), this.draw()) }),
+        Motion.spring({ from: this.ty, to: py, ...opts(vy), onUpdate: (y) => ((this.ty = y), this.draw()) }),
+      ];
+    }
+
+    // Globe release: keep spinning at the finger's speed and decelerate like a scroll view.
+    inertia(vx, vy) {
+      this.inertiaOn = true;
+      let v = [vx, vy];
+      let last = performance.now();
+      const step = (now) => {
+        if (!this.inertiaOn) return;
+        const dt = now - last;
+        last = now;
+        this.panBy((v[0] * dt) / 1000, (v[1] * dt) / 1000);
+        const decay = Math.pow(0.998, dt);
+        v = v.map((x) => x * decay);
+        if (Math.hypot(v[0], v[1]) > 8) requestAnimationFrame(step);
+        else this.inertiaOn = false;
+      };
+      requestAnimationFrame(step);
+    }
+
+    // Entering 3D: the globe settles into place with a short turn instead of popping in.
+    spinIn() {
+      this.stopMotion();
+      const r0 = this.rotate[0];
+      this.anims = [
+        Motion.spring({ from: 0.86, to: this.globeScale || 1, damping: 1, response: 0.5, onUpdate: (v) => ((this.globeScale = v), this.draw()) }),
+        Motion.spring({ from: r0 + 30, to: r0, damping: 1, response: 0.6, onUpdate: (v) => ((this.rotate = [v, this.rotate[1]]), this.draw()) }),
+      ];
     }
 
     flyTo(id) {
@@ -303,61 +376,66 @@
       const f = worldFeatures.find((x) => x.id === id);
       const target = f ? d3.geoCentroid(f) : c ? [c.lon, c.lat] : null;
       if (!target) return;
-      const from = this.rotate.slice();
-      const fromS = this.globeScale;
+      this.stopMotion();
       const to = [-target[0], -target[1]];
-      if (to[0] - from[0] > 180) from[0] += 360;
-      if (from[0] - to[0] > 180) from[0] -= 360;
-      const toS = Math.max(2.5, fromS);
-      const t0 = performance.now();
-      const step = (now) => {
-        const t = Math.min(1, (now - t0) / 600);
-        const e = t * (2 - t);
-        this.rotate = [from[0] + (to[0] - from[0]) * e, from[1] + (to[1] - from[1]) * e];
-        this.globeScale = fromS + (toS - fromS) * e;
-        this.draw();
-        if (t < 1) requestAnimationFrame(step);
-      };
-      requestAnimationFrame(step);
+      if (to[0] - this.rotate[0] > 180) this.rotate[0] += 360;
+      if (this.rotate[0] - to[0] > 180) this.rotate[0] -= 360;
+      const spring = (from, toV, set) => Motion.spring({ from, to: toV, damping: 1, response: 0.5, onUpdate: (v) => (set(v), this.draw()) });
+      this.anims = [
+        spring(this.rotate[0], to[0], (v) => (this.rotate = [v, this.rotate[1]])),
+        spring(this.rotate[1], to[1], (v) => (this.rotate = [this.rotate[0], v])),
+        spring(this.globeScale, Math.max(2.5, this.globeScale), (v) => (this.globeScale = v)),
+      ];
     }
 
     bindGestures() {
       const el = this.canvas;
+      const vt = Motion.tracker();
       let start = null;
       let moved = false;
       let lastTap = 0;
       let tapTimer = null;
       let pressTimer = null;
       let pinch = null;
-      let last = null;
+      this.raw = [0, 0];
 
       const local = (e) => {
         const r = el.getBoundingClientRect();
         return [e.clientX - r.left, e.clientY - r.top];
       };
+      const setPressed = (id) => {
+        if (this.pressed === id) return;
+        this.pressed = id;
+        this.draw();
+      };
 
       el.addEventListener("pointerdown", (e) => {
         el.setPointerCapture(e.pointerId);
         this.pointers.set(e.pointerId, local(e));
-        this.velocity = null;
+        this.stopMotion(); // grab the map mid-flight
         if (this.pointers.size === 1) {
           start = { p: local(e), t: performance.now() };
-          last = { p: local(e), t: performance.now() };
+          this.raw = [this.tx, this.ty];
+          vt.reset();
+          vt.add(...start.p);
           moved = false;
+          // Feedback on touch-down: highlight what's under the finger right away.
+          setPressed(this.hit(...start.p));
           clearTimeout(pressTimer);
           pressTimer = setTimeout(() => {
             if (!moved && this.pointers.size === 1) {
               const id = this.hit(...start.p);
               if (id && this.opts.onLongPress) {
                 moved = true; // swallow the tap
-                navigator.vibrate?.(15);
+                setPressed(null);
                 this.opts.onLongPress(id);
               }
             }
-          }, 500);
+          }, 450);
         } else if (this.pointers.size === 2) {
           clearTimeout(pressTimer);
           moved = true;
+          setPressed(null);
           const [a, b] = [...this.pointers.values()];
           pinch = { d: Math.hypot(a[0] - b[0], a[1] - b[1]) };
         }
@@ -373,20 +451,17 @@
           const d = Math.hypot(a[0] - b[0], a[1] - b[1]);
           if (pinch.d > 0) this.zoomAt(d / pinch.d, (a[0] + b[0]) / 2, (a[1] + b[1]) / 2);
           pinch.d = d;
+          this.raw = [this.tx, this.ty];
           return;
         }
         if (this.pointers.size !== 1) return;
+        vt.add(...p);
         if (!moved && Math.hypot(p[0] - start.p[0], p[1] - start.p[1]) > 8) {
           moved = true;
           clearTimeout(pressTimer);
+          setPressed(null);
         }
-        if (moved) {
-          this.panBy(p[0] - prev[0], p[1] - prev[1]);
-          const now = performance.now();
-          const dt = Math.max(1, now - last.t);
-          this.velocity = [(p[0] - last.p[0]) / dt, (p[1] - last.p[1]) / dt];
-          last = { p, t: now };
-        }
+        if (moved) this.panBy(p[0] - prev[0], p[1] - prev[1]);
       });
 
       const end = (e) => {
@@ -394,27 +469,41 @@
         this.pointers.delete(e.pointerId);
         clearTimeout(pressTimer);
         if (this.pointers.size < 2) pinch = null;
+        if (this.pointers.size === 1) {
+          // Pinch ended with one finger still down: keep panning from here, without a jump.
+          this.raw = [this.tx, this.ty];
+          vt.reset();
+          return;
+        }
         if (this.pointers.size > 0) return;
         if (!moved && start && e.type === "pointerup") {
           const p = start.p;
           const now = performance.now();
-          const isGlobe = this.mode === "globe" && this.region === "world";
-          if (isGlobe && now - lastTap < 300) {
+          if (this.isGlobe() && now - lastTap < 300) {
             clearTimeout(tapTimer);
             lastTap = 0;
+            setPressed(null);
             const id = this.hit(...p);
             if (id) this.flyTo(id);
             return;
           }
           lastTap = now;
           const fire = () => {
+            setPressed(null);
             const id = this.hit(...p);
             if (id && this.opts.onTap) this.opts.onTap(id);
           };
-          if (isGlobe) tapTimer = setTimeout(fire, 280);
+          // Only the globe has a double-tap, so only the globe pays the disambiguation delay.
+          if (this.isGlobe()) tapTimer = setTimeout(fire, 260);
           else fire();
-        } else if (moved && this.velocity && this.mode === "globe" && performance.now() - last.t < 80) {
-          this.inertia();
+          return;
+        }
+        setPressed(null);
+        const v = vt.velocity();
+        if (this.isGlobe()) {
+          if (Math.hypot(v.x, v.y) > 30) this.inertia(v.x, v.y);
+        } else {
+          this.settleFlat(v.x, v.y);
         }
       };
       el.addEventListener("pointerup", end);
@@ -422,26 +511,26 @@
 
       el.addEventListener("wheel", (e) => {
         e.preventDefault();
+        this.stopMotion();
         const [x, y] = local(e);
         this.zoomAt(Math.exp(-e.deltaY * 0.002), x, y);
       }, { passive: false });
     }
 
-    inertia() {
-      let v = this.velocity.map((x) => x * 16);
-      const step = () => {
-        if (!this.velocity) return;
-        this.panBy(v[0], v[1]);
-        v = v.map((x) => x * 0.93);
-        if (Math.hypot(v[0], v[1]) > 0.3) requestAnimationFrame(step);
-      };
-      requestAnimationFrame(step);
-    }
-
     resetView() {
+      this.stopMotion();
+      const fromK = this.k;
+      const fromT = [this.tx, this.ty];
       this.initialView(this.opts.center && this.opts.center());
-      this.globeScale = 1;
-      this.render();
+      const to = { k: this.k, tx: this.tx, ty: this.ty };
+      [this.k, this.tx, this.ty] = [fromK, fromT[0], fromT[1]];
+      const go = (from, target, set) => Motion.spring({ from, to: target, damping: 1, response: 0.45, onUpdate: (v) => (set(v), this.draw()) });
+      this.anims = [
+        go(this.k, to.k, (v) => (this.k = v)),
+        go(this.tx, to.tx, (v) => (this.tx = v)),
+        go(this.ty, to.ty, (v) => (this.ty = v)),
+        go(this.globeScale, 1, (v) => (this.globeScale = v)),
+      ];
     }
   }
 

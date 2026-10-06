@@ -67,7 +67,8 @@ public class MainActivity extends Activity {
         s.setDomStorageEnabled(true);
         s.setAllowFileAccess(false);
         s.setAllowContentAccess(false);
-        s.setTextZoom(100);
+        // Follow the system font size, like Dynamic Type; the layout is in rem and scales with it.
+        s.setTextZoom(Math.round(getResources().getConfiguration().fontScale * 100));
         web.setOverScrollMode(WebView.OVER_SCROLL_NEVER);
         web.addJavascriptInterface(new Bridge(), "WandermapNative");
 

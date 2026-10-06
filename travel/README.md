@@ -27,6 +27,20 @@ Every build is signed with the same key, so a new APK installs over the old one 
 
 Counting rules are always shown, and changing one tells you the old and new denominator.
 
+## Look and feel
+
+The UI follows Apple's fluid-interface guidelines, adapted for the web (`js/motion.js`):
+
+- Interruptible springs (damping ratio and response) instead of fixed-length animations. Everything you can touch can be grabbed mid-motion.
+- The Place sheet tracks your finger 1:1, projects where a flick is heading, settles on a detent with your release speed, and rubber-bands at the top.
+- Full-screen pages slide in from the right and leave the same way. Swipe from the left edge to go back.
+- The flat map rubber-bands at its edges and glides on with momentum. The globe spins on and slows down like a scroll view.
+- Feedback starts on touch-down: the country under your finger highlights, buttons press in, and changes give a light haptic tick.
+- Countries blend to their new colour, the counter counts up, checks pop, and Stats cards cascade in.
+- Translucent tab bar and map controls, iOS system colours, inset grouped lists, and size-specific letter spacing. The app follows the system font size.
+- Undo replaces "are you sure?" for clearing a place or deleting a visit.
+- Respects Reduce Motion, Reduce Transparency and Increase Contrast.
+
 ## Not built yet
 
 These parts of the spec are left out: cities and airports, video export, home-screen widget, in-app purchase (every

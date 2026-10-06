@@ -115,12 +115,31 @@
   }
 
   let toastTimer;
-  function toast(msg, ms = 2600) {
+  // A transient status; with `undo`, it offers a way back instead of asking "are you sure?" first.
+  function toast(msg, ms = 2600, undo = null) {
     const el = $("#toast");
-    el.textContent = msg;
+    el.classList.add("material");
+    el.innerHTML = `<span>${esc(msg)}</span>${undo ? `<button class="btn small">Undo</button>` : ""}`;
+    el.hidden = true;
+    void el.offsetWidth; // restart the entrance animation
     el.hidden = false;
+    if (undo) {
+      $("button", el).addEventListener("click", () => {
+        el.hidden = true;
+        undo();
+      });
+    }
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => (el.hidden = true), ms);
+    toastTimer = setTimeout(() => (el.hidden = true), undo ? Math.max(ms, 5000) : ms);
+  }
+
+  function snapshot() {
+    const saved = JSON.stringify(state.visits);
+    return () => {
+      state.visits = JSON.parse(saved);
+      changed();
+      Motion.haptic(8);
+    };
   }
 
   function applyTheme() {
@@ -161,8 +180,15 @@
 
   function setStatus(type, id, status) {
     const list = visitsFor(type, id);
+    Motion.haptic(10);
+    ui.justChanged = type + ":" + id;
     if (!status) {
+      if (!list.length) return;
+      const undo = snapshot();
       state.visits = state.visits.filter((v) => !(v.profile === state.active && v.type === type && v.place === id));
+      changed();
+      toast(`${placeName(type, id)} cleared${list.some((v) => v.first) ? ` (${list.length} visit${list.length > 1 ? "s" : ""})` : ""}`, 5000, undo);
+      return;
     } else if (!list.length) {
       state.visits.push({ id: uid(), profile: state.active, type, place: id, status, first: null, last: null, note: "" });
     } else {
@@ -181,10 +207,10 @@
         return;
       }
       setStatus(type, id, null);
-      toast(placeName(type, id) + " removed");
     } else {
+      const undo = snapshot();
       setStatus(type, id, "visited");
-      toast("✓ " + placeName(type, id) + " visited");
+      toast("✓ " + placeName(type, id) + " visited", 3000, undo);
     }
   }
 
@@ -194,7 +220,11 @@
   function changed() {
     save();
     const before = currentAchievements;
+    const prevStyles = new Map();
+    for (const c of COUNTRIES) prevStyles.set("country:" + c.id, theme ? countryStyle(c.id) : null);
+    for (const r of REGIONS) prevStyles.set("region:" + r.id, theme ? regionStyle(r.id) : null);
     currentStats = stats();
+    startFade(prevStyles);
     currentAchievements = Core.evaluateAchievements(DATA, currentStats, state.visits, state.active, state.home);
     if (before) {
       const newly = currentAchievements.filter((a, i) => a.done && !before[i].done);
@@ -214,6 +244,44 @@
     if (ui.tab === "profile") renderProfile();
     if (ui.sheet) renderSheet();
     if (ui.screen?.refresh) ui.screen.refresh();
+    ui.justChanged = null;
+  }
+
+  // ---- Colour transitions -------------------------------------------------------------
+  // Places that change colour blend from their old fill to the new one instead of snapping.
+  const FADE_MS = 420;
+  function startFade(prevStyles) {
+    if (Motion.reduceMotion() || !theme) return;
+    const from = new Map();
+    for (const [key, st] of prevStyles) {
+      const [kind, id] = key.split(":");
+      const now = kind === "country" ? countryStyle(id) : regionStyle(id);
+      if (st && (st.fill !== now.fill || st.hatch !== now.hatch)) from.set(key, st);
+    }
+    if (!from.size) return;
+    ui.fade = { from, t0: performance.now() };
+    const tick = (t) => {
+      if (!ui.fade) return;
+      const done = t - ui.fade.t0 >= FADE_MS;
+      if (done) ui.fade = null;
+      worldMap?.draw();
+      regionMap?.draw();
+      ui.screen?.redraw?.();
+      if (!done) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+
+  function faded(key, target) {
+    const f = ui.fade;
+    const prev = f && f.from.get(key);
+    if (!prev) return target;
+    const t = Math.min(1, (performance.now() - f.t0) / FADE_MS);
+    const e = 1 - Math.pow(1 - t, 3); // ease-out: quick start, gentle landing
+    const a = prev.fill || theme.unvisited;
+    const b = target.fill || theme.unvisited;
+    if (target.hatch) return t > 0.5 ? target : { fill: mix(a, theme.unvisited, e * 2) };
+    return { fill: mix(a, b, e) };
   }
 
   // ---- Map colouring ------------------------------------------------------------
@@ -275,6 +343,13 @@
     if (tab === "places") renderPlaces();
     if (tab === "stats") renderStats();
     if (tab === "profile") renderProfile();
+    // Stagger the cards in on arrival, not on every refresh.
+    const sec = $("#tab-" + tab);
+    sec.classList.remove("enter");
+    void sec.offsetWidth;
+    sec.classList.add("enter");
+    clearTimeout(ui.enterTimer);
+    ui.enterTimer = setTimeout(() => sec.classList.remove("enter"), 900);
   }
 
   $$(".tabs button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
@@ -289,7 +364,7 @@
       region: "world",
       countries: COUNTRIES,
       theme: () => theme,
-      style: (id) => countryStyle(id),
+      style: (id) => faded("country:" + id, countryStyle(id)),
       onTap: (id) => {
         if (ui.anim) return stopAnimation();
         openSheet("country", id);
@@ -309,8 +384,14 @@
     };
     $$(".map-top .seg button").forEach((b) =>
       b.addEventListener("click", () => {
+        if (b.classList.contains("on")) return;
         $$(".map-top .seg button").forEach((x) => x.classList.toggle("on", x === b));
+        const canvas = $("#map");
+        canvas.classList.remove("morph");
+        void canvas.offsetWidth;
+        canvas.classList.add("morph");
         worldMap.setMode(b.dataset.mode);
+        if (b.dataset.mode === "globe") worldMap.spinIn();
       }),
     );
     $("#map-reset").addEventListener("click", () => worldMap.resetView());
@@ -318,9 +399,26 @@
     $("#counter").addEventListener("click", () => showTab("stats"));
   }
 
+  // The counter rolls to its new value rather than jumping.
+  let counterAnim = null;
+  let counterShown = null;
   function renderCounter() {
     const s = currentStats;
-    $("#counter").textContent = `${s.visited} ${s.visited === 1 ? "country" : "countries"} · ${pct(s.pct)} of the world`;
+    const el = $("#counter");
+    const write = (n) => {
+      const v = Math.round(n);
+      el.textContent = `${v} ${v === 1 ? "country" : "countries"} · ${pct(s.total ? n / s.total : 0)} of the world`;
+    };
+    counterAnim?.stop();
+    if (counterShown === null || counterShown === s.visited) {
+      counterShown = s.visited;
+      write(s.visited);
+      return;
+    }
+    el.classList.remove("bump");
+    void el.offsetWidth;
+    el.classList.add("bump");
+    counterAnim = Motion.spring({ from: counterShown, to: s.visited, damping: 1, response: 0.45, onUpdate: (v) => ((counterShown = v), write(v)) });
   }
 
   function toggleFilterBar() {
@@ -390,7 +488,10 @@
       ui.anim = { year, t: Math.min(1, t) };
       const n = currentStats.perYear.find((y) => y.year === year).countries.length;
       const total = currentStats.perYear.filter((y) => y.year <= year).reduce((s, y) => s + y.countries.length, 0);
-      label.innerHTML = `${year}<small>+${n} new · ${total} total</small>`;
+      if (label.dataset.year !== String(year)) {
+        label.dataset.year = year;
+        label.innerHTML = `<span class="roll">${year}</span><small>+${n} new · ${total} total</small>`;
+      }
       worldMap.draw();
       ui.animRaf = requestAnimationFrame(tick);
     };
@@ -444,9 +545,9 @@
     const d = latestDate(type, item.id);
     const mark = st === "wishlist" ? "★" : Core.counts(st) ? "✓" : "";
     return `<button class="place-row" data-type="${type}" data-id="${item.id}">
-      <span class="flag" aria-hidden="true">${type === "region" ? `<small style="font-size:12px;font-weight:700">${item.id.slice(3)}</small>` : item.flag}</span>
+      <span class="flag" aria-hidden="true">${type === "region" ? `<span class="code">${item.id.slice(3)}</span>` : item.flag}</span>
       <span class="name">${esc(item.name)}${d || extra ? `<small>${[d ? fmtDate(d) : "", extra].filter(Boolean).join(" · ")}</small>` : ""}</span>
-      <span class="check ${st || ""}" role="checkbox" aria-checked="${Core.counts(st)}" aria-label="${esc(item.name)}: ${st || "not visited"}">${mark}</span>
+      <span class="check ${st || ""}${ui.justChanged === type + ":" + item.id ? " pop" : ""}" role="checkbox" aria-checked="${Core.counts(st)}" aria-label="${esc(item.name)}: ${st || "not visited"}">${mark}</span>
     </button>`;
   }
 
@@ -483,13 +584,13 @@
         const shown = sortItems("country", all.filter((c) => searchMatch(c) && matchesFilter(currentStats.status.get(c.id))));
         if (!shown.length) continue;
         html += `<div class="group-h">${ct.name}<span>${done} / ${all.length}</span></div>`;
-        html += shown.map((c) => placeRow("country", c, currentStats.status.get(c.id))).join("");
+        html += `<div class="group">${shown.map((c) => placeRow("country", c, currentStats.status.get(c.id))).join("")}</div>`;
       }
       if (!state.settings.countTerritories) {
         const terr = sortItems("country", COUNTRIES.filter((c) => !c.un && searchMatch(c) && matchesFilter(currentStats.status.get(c.id))));
         if (terr.length && (ui.search || ui.filter !== "all")) {
           html += `<div class="group-h">Territories<span>not counted</span></div>`;
-          html += terr.map((c) => placeRow("country", c, currentStats.status.get(c.id))).join("");
+          html += `<div class="group">${terr.map((c) => placeRow("country", c, currentStats.status.get(c.id))).join("")}</div>`;
         }
       }
     } else {
@@ -497,14 +598,14 @@
       const counted = Core.activeRegions(REGIONS, "US", state.settings);
       const done = counted.filter((r) => Core.counts(rs.get(r.id))).length;
       const shown = sortItems("region", counted.filter((r) => searchMatch(r) && matchesFilter(rs.get(r.id))));
-      html += `<div class="group-h">United States<span>${done} / ${counted.length}</span></div>`;
-      html += `<div style="padding:4px 16px 8px"><button class="btn link" data-open-us>Open the US map →</button></div>`;
-      html += shown.map((r) => placeRow("region", r, rs.get(r.id), r.type !== "state" ? r.type : "")).join("");
+      html += `<div class="list" style="margin-top:0.75rem"><div class="list-row"><div><b>United States</b><small>${done} / ${counted.length} visited</small></div><button class="btn small primary" data-open-us>Open map</button></div></div>`;
+      html += `<div class="group-h">States<span>${done} / ${counted.length}</span></div>`;
+      html += `<div class="group">${shown.map((r) => placeRow("region", r, rs.get(r.id), r.type !== "state" ? r.type : "")).join("")}</div>`;
       if (!state.settings.regionTerritories) {
         const terr = REGIONS.filter((r) => !r.main && searchMatch(r) && matchesFilter(rs.get(r.id)));
         if (terr.length) {
           html += `<div class="group-h">US territories<span>not counted</span></div>`;
-          html += terr.map((r) => placeRow("region", r, rs.get(r.id))).join("");
+          html += `<div class="group">${terr.map((r) => placeRow("region", r, rs.get(r.id))).join("")}</div>`;
         }
       }
     }
@@ -513,17 +614,22 @@
   }
 
   // ---- Place sheet ---------------------------------------------------------------
+  const sheetCtl = Motion.Sheet($("#sheet"), $("#sheet-backdrop"), $("#sheet"), {
+    handle: ".sheet-top",
+    onClosed: () => {
+      if (!ui.sheet) $("#sheet-body").innerHTML = "";
+    },
+  });
+
   function openSheet(type, id) {
     ui.sheet = { type, id, editing: null };
-    $("#sheet").hidden = false;
-    $("#sheet-backdrop").hidden = false;
     renderSheet();
+    sheetCtl.open();
   }
 
   function closeSheet() {
-    ui.sheet = null;
-    $("#sheet").hidden = true;
-    $("#sheet-backdrop").hidden = true;
+    ui.sheet = null; // content stays on screen while it slides away
+    sheetCtl.close();
   }
   $("#sheet-backdrop").addEventListener("click", closeSheet);
 
@@ -540,42 +646,52 @@
       const regs = REGIONS.filter((r) => r.country === id);
       if (regs.length) {
         const r = currentStats.regions[id];
-        extra = `<div class="list" style="margin-top:14px"><div class="list-row"><div><b>States</b><small>${r.visited} / ${r.total} visited</small></div><button class="btn primary" data-open-regions="${id}">Open map</button></div></div>`;
+        extra = `<div class="list" style="margin-top:0.75rem"><div class="list-row"><div><b>States</b><small>${r.visited} / ${r.total} visited</small></div><button class="btn small primary" data-open-regions="${id}">Open map</button></div></div>`;
       }
     } else {
       const r = REGION.get(id);
       sub = `${r.type[0].toUpperCase() + r.type.slice(1)} · <button class="btn link" data-parent="${r.country}">${esc(COUNTRY.get(r.country).name)}</button>`;
     }
     const statusBtns = [
-      ["visited", "Visited"],
-      ["lived", "Lived"],
-      ["wishlist", "Wishlist"],
-      [null, "Clear"],
+      ["visited", "Visited", "✓"],
+      ["lived", "Lived", "⌂"],
+      ["wishlist", "Wishlist", "★"],
+      [null, "Clear", "✕"],
     ]
-      .map(([s, label]) => `<button data-status="${s || ""}" class="${s && st === s ? "on " + s : ""}" aria-pressed="${s && st === s}">${label}</button>`)
+      .map(([s, label, icon]) => `<button data-status="${s || ""}" class="${s && st === s ? "on " + s + (ui.justChanged === type + ":" + id ? " pop" : "") : ""}" aria-pressed="${s && st === s}"><i aria-hidden="true">${icon}</i>${label}</button>`)
       .join("");
 
     const visitRows = visits.length
       ? visits
           .map(
             (v) => `<div class="visit"><div><b>${esc(fmtRange(v))}</b><small>${esc(v.status)}${v.note ? " · " + esc(v.note) : ""}</small></div>
-            <button class="icon-btn" data-edit="${v.id}" aria-label="Edit visit">✎</button></div>`,
+            <button class="btn link" data-edit="${v.id}">Edit</button></div>`,
           )
           .join("")
-      : `<p class="note">No visits recorded yet.</p>`;
+      : `<div class="visit"><div class="note">No visits recorded yet.</div></div>`;
 
+    const keepScroll = $(".sheet-scroll")?.scrollTop || 0;
     $("#sheet-body").innerHTML = `
-      <div class="sheet-head">
-        <span class="flag" aria-hidden="true">${type === "region" ? "🗺️" : placeFlag(type, id)}</span>
-        <div><h2>${esc(placeName(type, id))}</h2><small>${sub}</small></div>
+      <div class="sheet-top">
+        <div class="grab" aria-hidden="true"></div>
+        <div class="sheet-head">
+          <span class="flag" aria-hidden="true">${type === "region" ? "🗺️" : placeFlag(type, id)}</span>
+          <div style="flex:1;min-width:0"><h2>${esc(placeName(type, id))}</h2><small>${sub}</small></div>
+          <button class="icon-btn" data-close-sheet aria-label="Close">✕</button>
+        </div>
+        <div class="status-row">${statusBtns}</div>
       </div>
-      <div class="status-row">${statusBtns}</div>
-      ${extra}
-      <h3>Visits</h3>
-      ${visitRows}
-      ${editing ? visitForm(visits.find((v) => v.id === editing)) : `<button class="btn block" data-add style="margin-top:12px">+ Add a visit with dates</button>`}
+      <div class="sheet-scroll">
+        ${extra}
+        <h3>Visits</h3>
+        <div class="list">${visitRows}${editing ? visitForm(visits.find((v) => v.id === editing)) : ""}</div>
+        ${editing ? "" : `<div class="section" style="margin-top:0.75rem"><button class="btn block" data-add>Add a visit with dates</button></div>`}
+      </div>
     `;
+    $(".sheet-scroll").scrollTop = keepScroll;
+    sheetCtl.relayout();
     const body = $("#sheet-body");
+    $("[data-close-sheet]", body).addEventListener("click", closeSheet);
     $$("[data-status]", body).forEach((b) => b.addEventListener("click", () => setStatus(type, id, b.dataset.status || null)));
     $("[data-add]", body)?.addEventListener("click", () => {
       ui.sheet.editing = "new";
@@ -632,9 +748,11 @@
       renderSheet();
     });
     $("#v-delete", body)?.addEventListener("click", () => {
+      const undo = snapshot();
       state.visits = state.visits.filter((x) => x.id !== v.id);
       ui.sheet.editing = null;
       changed();
+      toast("Visit deleted", 5000, undo);
     });
     $("#v-save", body).addEventListener("click", () => {
       let f = first.value || null;
@@ -649,6 +767,7 @@
         else state.visits.push({ id: uid(), profile: state.active, type, place: id, ...rec });
       }
       ui.sheet.editing = null;
+      Motion.haptic(10);
       changed();
     });
   }
@@ -657,7 +776,7 @@
   function openRegionMap(countryId) {
     const c = COUNTRY.get(countryId);
     openScreen({
-      html: `<div class="screen-h"><button class="icon-btn" data-close aria-label="Back">←</button><h2>${esc(c.name)}</h2><span id="region-count" class="note"></span></div>
+      html: `<div class="screen-h"><button class="icon-btn" data-close aria-label="Back">‹ Back</button><h2>${esc(c.name)}</h2><span id="region-count" class="note"></span></div>
         <div style="flex:1;display:flex;position:relative"><canvas id="region-canvas" aria-label="Map of ${esc(c.name)} states"></canvas></div>
         <p class="map-hint" style="position:static;padding:8px">Tap a state for details · long-press to mark visited</p>`,
       mount(root) {
@@ -665,7 +784,7 @@
           region: countryId,
           countries: COUNTRIES,
           theme: () => theme,
-          style: (id) => regionStyle(id),
+          style: (id) => faded("region:" + id, regionStyle(id)),
           onTap: (id) => openSheet("region", id),
           onLongPress: (id) => quickToggle("region", id),
         });
@@ -683,22 +802,27 @@
   }
 
   // ---- Full-screen overlays ---------------------------------------------------------
+  // Pages enter from the right and leave the same way; swipe from the left edge to go back.
+  const pager = Motion.Pager($("#screen"), $("#screen-scrim"));
+
   function openScreen(screen) {
-    closeScreen();
     const el = $("#screen");
+    if (ui.screen) ui.screen.unmount?.();
     el.innerHTML = screen.html;
-    el.hidden = false;
     ui.screen = screen;
     $$("[data-close]", el).forEach((b) => b.addEventListener("click", closeScreen));
+    pager.open(() => {
+      if (ui.screen === screen) ui.screen = null;
+      screen.unmount?.();
+      if (!ui.screen) el.innerHTML = "";
+    });
     screen.mount?.(el);
   }
 
   function closeScreen() {
     if (!ui.screen) return;
-    ui.screen.unmount?.();
     ui.screen = null;
-    $("#screen").hidden = true;
-    $("#screen").innerHTML = "";
+    pager.close();
   }
 
   // ---- Stats tab ----------------------------------------------------------------------
@@ -707,7 +831,7 @@
     const c = 2 * Math.PI * r;
     return `<svg class="ring" viewBox="0 0 124 124" role="img" aria-label="${pct(p)} of the world">
       <circle cx="62" cy="62" r="${r}" fill="none" stroke="var(--surface-2)" stroke-width="12"/>
-      <circle cx="62" cy="62" r="${r}" fill="none" stroke="var(--pc)" stroke-width="12" stroke-linecap="round"
+      <circle class="arc" cx="62" cy="62" r="${r}" fill="none" stroke="var(--pc)" stroke-width="12" stroke-linecap="round"
         stroke-dasharray="${c * p} ${c}" transform="rotate(-90 62 62)"/>
       <text x="62" y="70" text-anchor="middle" font-size="24" font-weight="800">${pct(p)}</text></svg>`;
   }
@@ -721,7 +845,7 @@
       <div class="hero">
         ${ring(s.pct)}
         <div>
-          <div class="big">${s.visited} <small style="font-size:16px;font-weight:600">/ ${s.total}</small></div>
+          <div class="big">${s.visited}<small style="font-size:1.1rem;font-weight:600;letter-spacing:-0.01em;color:var(--muted)"> / ${s.total}</small></div>
           <p>countries visited</p>
           <p>${pct(s.areaPct)} of the world's land area</p>
         </div>
@@ -736,14 +860,14 @@
         <div class="card"><b>${s.lastTrip ? esc(fmtDate(s.lastTrip.date)) : "–"}</b><span>latest trip${s.lastTrip ? " · " + name(s.lastTrip.country) : ""}</span></div>
         ${s.mostVisited ? `<div class="card" style="grid-column:1/-1"><b>${name(s.mostVisited.country)}</b><span>most visited · ${s.mostVisited.count} trips</span></div>` : ""}
       </div>
-      <button class="btn primary block" data-share style="margin-top:16px">Share my map</button>
+      <div class="section" style="margin-top:1rem"><button class="btn primary block" data-share>Share my map</button></div>
 
       <h3>Continents</h3>
       <div class="bars">${s.byContinent
         .map((c) => `<div class="bar-row"><span>${c.name}</span><div class="track"><div class="fill" style="width:${(c.visited / c.total) * 100}%"></div></div><em>${c.visited} / ${c.total}</em></div>`)
         .join("")}</div>
 
-      <h3 style="display:flex;justify-content:space-between;align-items:center">Timeline <button class="btn" data-play style="text-transform:none;letter-spacing:0">▶ Play</button></h3>
+      <div class="h3-row"><h3>Timeline</h3><button class="btn small" data-play style="margin-top:1.2rem">▶ Play</button></div>
       ${
         s.perYear.length
           ? s.perYear
@@ -766,8 +890,8 @@
 
   // ---- Share image ------------------------------------------------------------------
   const IMG_THEMES = {
-    light: { bg: "#f6f7f9", card: "#ffffff", text: "#15181d", muted: "#646b76", ocean: "#e3ecf3", land: "#d3d7dd", unvisited: "#d3d7dd", border: "#ffffff", track: "#e6e9ed" },
-    dark: { bg: "#0f1216", card: "#181c22", text: "#eef1f5", muted: "#9aa3ae", ocean: "#121a24", land: "#39404a", unvisited: "#39404a", border: "#0f1216", track: "#262b33" },
+    light: { bg: "#f2f2f7", card: "#ffffff", text: "#000000", muted: "#8a8a8e", ocean: "#dfe8f1", land: "#d1d5db", unvisited: "#d1d5db", border: "#f7f8fa", track: "#e5e5ea" },
+    dark: { bg: "#000000", card: "#1c1c1e", text: "#ffffff", muted: "#98989f", ocean: "#0c1420", land: "#3a3a3c", unvisited: "#3a3a3c", border: "#0c1420", track: "#2c2c2e" },
   };
 
   function renderShareImage({ template, format, look }) {
@@ -902,10 +1026,10 @@
     const seg = (key, items) =>
       `<div class="seg" data-opt="${key}">${items.map(([v, l]) => `<button data-v="${v}" class="${opts[key] === v ? "on" : ""}">${l}</button>`).join("")}</div>`;
     openScreen({
-      html: `<div class="screen-h"><button class="icon-btn" data-close aria-label="Close">✕</button><h2>Share image</h2></div>
+      html: `<div class="screen-h"><button class="icon-btn" data-close>Cancel</button><h2>Share image</h2><span class="icon-btn" aria-hidden="true"></span></div>
         <div class="screen-body">
           <div class="share-preview"><img id="share-img" alt="Preview of the share image"></div>
-          <div style="display:grid;gap:10px;padding:0 16px 16px;justify-items:start">
+          <div class="share-opts">
             ${seg("template", [["map", "Map"], ["stats", "Map + stats"], ["bars", "Continents"], ["year", "Year"]])}
             ${seg("format", [["portrait", "Post 4:5"], ["story", "Story 9:16"]])}
             ${seg("look", [["light", "Light"], ["dark", "Dark"]])}
@@ -1005,7 +1129,7 @@
     const sets = { me: new Set(cmp.onlyMe), them: new Set(cmp.onlyThem), both: new Set(cmp.both) };
     const list = (ids) =>
       ids.length
-        ? `<div class="chips">${ids
+        ? `<div class="chips section">${ids
             .map((id) => COUNTRY.get(id))
             .filter(Boolean)
             .sort((a, b) => a.name.localeCompare(b.name))
@@ -1014,14 +1138,14 @@
         : `<p class="note">None</p>`;
     let compareMap = null;
     openScreen({
-      html: `<div class="screen-h"><button class="icon-btn" data-close aria-label="Back">←</button><h2>You and ${esc(friend.name)}</h2>
+      html: `<div class="screen-h"><button class="icon-btn" data-close aria-label="Back">‹ Back</button><h2>You and ${esc(friend.name)}</h2>
           <button class="icon-btn" data-remove aria-label="Remove friend">🗑</button></div>
         <div class="screen-body">
           <div class="map-box"><canvas id="compare-canvas" aria-label="Comparison map"></canvas></div>
           <div class="legend"><span><i style="background:${pc}"></i>Only you (${cmp.onlyMe.length})</span>
             <span><i style="background:${FRIEND}"></i>Only ${esc(friend.name)} (${cmp.onlyThem.length})</span>
             <span><i style="background:${BOTH}"></i>Both (${cmp.both.length})</span></div>
-          <div class="padded" style="padding-top:0">
+          <div style="padding-bottom:2rem">
             <div class="cards" style="margin-top:0">
               <div class="card"><b>${mine.visited.size}</b><span>your countries</span></div>
               <div class="card"><b>${theirs.visited.size}</b><span>${esc(friend.name)}'s countries</span></div>
@@ -1031,7 +1155,7 @@
             <h3>Only ${esc(friend.name)}</h3>${list(cmp.onlyThem)}
             <h3>You could visit together</h3>
             <p class="note">On both your wishlists.</p>${list(cmp.together)}
-            <p class="note" style="margin-top:18px">Code imported ${esc(fmtDate(friend.updated))}. Ask ${esc(friend.name)} for a new code to refresh.</p>
+            <p class="note" style="margin-top:1.2rem">Code imported ${esc(fmtDate(friend.updated))}. Ask ${esc(friend.name)} for a new code to refresh.</p>
           </div>
         </div>`,
       mount(root) {
@@ -1070,25 +1194,25 @@
     const unCount = COUNTRIES.filter((c) => c.un).length;
     const opt = (v, cur, label) => `<option value="${v}" ${String(cur) === String(v) ? "selected" : ""}>${label}</option>`;
     $("#profile").innerHTML = `
-      <h2>Profiles</h2>
-      <div class="list" style="margin-top:10px">
+      <h3 style="margin-top:0.5rem">Profiles</h3>
+      <div class="list">
         ${state.profiles
           .map((x) => {
             const n = Core.computeStats(DATA, state.visits, x.id, s).visited;
             return `<div class="list-row"><span class="swatch" style="background:${x.color}"></span>
               <div><b>${esc(x.name)}</b><small>${n} countries${x.id === p.id ? " · active" : ""}</small></div>
-              ${x.id === p.id ? "" : `<button class="btn" data-switch="${x.id}">Switch</button>`}</div>`;
+              ${x.id === p.id ? `<span style="color:var(--accent);font-weight:700">✓</span>` : `<button class="btn small" data-switch="${x.id}">Switch</button>`}</div>`;
           })
           .join("")}
+        <div class="list-row"><button class="btn link" data-add-profile>Add profile</button></div>
       </div>
-      <div class="btns" style="margin-top:10px"><button class="btn" data-add-profile>+ Add profile</button></div>
 
       <h3>This profile</h3>
       <div class="list">
-        <div class="setting"><span>Name</span><input type="text" id="p-name" value="${esc(p.name)}" maxlength="30" style="max-width:55%"></div>
-        <div class="setting"><span>Colour</span><div class="swatches">${PALETTE.map((c) => `<button data-color="${c}" class="${c === p.color ? "on" : ""}" style="background:${c}" aria-label="Colour ${c}"></button>`).join("")}</div></div>
+        <div class="setting"><span>Name</span><input type="text" id="p-name" value="${esc(p.name)}" maxlength="30" style="max-width:60%"></div>
+        <div class="setting" style="color:var(--text)"><span>Colour</span><div class="swatches">${PALETTE.map((c) => `<button data-color="${c}" class="${c === p.color ? "on" : ""}" style="background:${c}" aria-label="Colour ${c}"></button>`).join("")}</div></div>
         <div class="setting"><span>Home country</span><select id="home">${opt("", state.home || "", "Not set")}${COUNTRIES.map((c) => opt(c.id, state.home || "", c.flag + " " + esc(c.name))).join("")}</select></div>
-        ${state.profiles.length > 1 ? `<div class="setting"><span>Delete this profile and its visits</span><button class="btn danger" data-del-profile>Delete</button></div>` : ""}
+        ${state.profiles.length > 1 ? `<div class="list-row"><button class="btn link danger" data-del-profile style="color:var(--danger)">Delete this profile…</button></div>` : ""}
       </div>
 
       <h3>Compare with friends</h3>
@@ -1098,7 +1222,7 @@
           <p class="note" style="margin:4px 0 8px">Only the countries and states you marked, plus your profile name. No account, no server.</p>
           <div class="qr"><img alt="QR code with your share link" src="${qrImage(linkFor(code))}"></div>
           <div class="code-box" id="my-code">${esc(code)}</div>
-          <div class="btns" style="margin-top:10px"><button class="btn primary" data-share-code>Share code</button><button class="btn" data-copy-code>Copy</button></div>
+          <div class="btns" style="margin-top:0.75rem"><button class="btn primary" style="flex:1" data-share-code>Share code</button><button class="btn" style="flex:1" data-copy-code>Copy</button></div>
         </div>
         ${state.friends
           .map((f) => {
@@ -1106,21 +1230,21 @@
             try {
               n = Core.decodeShare(DATA, f.code).visited.size;
             } catch (e) {}
-            return `<div class="list-row"><span class="swatch" style="background:#E69F00"></span><div><b>${esc(f.name)}</b><small>${n} countries</small></div><button class="btn" data-compare="${f.id}">Compare</button></div>`;
+            return `<div class="list-row"><span class="swatch" style="background:#E69F00"></span><div><b>${esc(f.name)}</b><small>${n} countries</small></div><button class="btn small" data-compare="${f.id}">Compare</button></div>`;
           })
           .join("")}
-        <div class="list-row"><div><input type="text" id="friend-code" placeholder="Paste a friend's code or link"></div><button class="btn" data-add-friend>Add</button></div>
+        <div class="list-row"><div><input type="text" id="friend-code" placeholder="Paste a friend's code or link" aria-label="Friend's share code"></div><button class="btn small primary" data-add-friend>Add</button></div>
       </div>
 
       <h3>Counting rules</h3>
       <div class="list">
-        <div class="setting"><div>Countries<small>Changes the denominator of every percentage.</small></div>
-          <select id="s-terr">${opt("false", s.countTerritories, `UN members + observers (${unCount})`)}${opt("true", s.countTerritories, `Include territories (${COUNTRIES.length})`)}</select></div>
-        <div class="setting"><span>Continents</span><select id="s-cont">${opt(7, s.continentModel, "7 (North + South America)")}${opt(6, s.continentModel, "6 (Americas as one)")}</select></div>
-        <div class="setting"><div>US regions<small>Main = 50 states + DC</small></div>
-          <select id="s-rterr">${opt("false", s.regionTerritories, "Main subdivisions (51)")}${opt("true", s.regionTerritories, "Include territories (56)")}</select></div>
-        <p class="note" style="padding:0 14px 12px;margin:0">Visited and lived count. Wishlist never counts.</p>
+        <div class="setting"><div>Countries<small>UN members + 2 observers, or every territory too</small></div>
+          <select id="s-terr">${opt("false", s.countTerritories, `UN (${unCount})`)}${opt("true", s.countTerritories, `With territories (${COUNTRIES.length})`)}</select></div>
+        <div class="setting"><span>Continents</span><select id="s-cont">${opt(7, s.continentModel, "7")}${opt(6, s.continentModel, "6 (one America)")}</select></div>
+        <div class="setting"><div>US regions<small>50 states + DC, or with territories</small></div>
+          <select id="s-rterr">${opt("false", s.regionTerritories, "51")}${opt("true", s.regionTerritories, "56")}</select></div>
       </div>
+      <p class="note">These change the denominator of every percentage. Visited and lived count; wishlist never does.</p>
 
       <h3>Map</h3>
       <div class="list">
@@ -1131,17 +1255,17 @@
 
       <h3>Backup</h3>
       <div class="list">
-        <div class="list-row" style="display:block">
-          <p class="note" style="margin:0 0 10px">Your data lives only on this phone. Android also backs it up to your Google account if device backup is on.</p>
-          <div class="btns"><button class="btn" data-export="json">Export JSON</button><button class="btn" data-export="csv">Export CSV</button><button class="btn" data-import>Import JSON</button></div>
-          <input type="file" id="import-file" accept="application/json,.json" hidden>
-        </div>
+        <div class="list-row"><button class="btn link" data-export="json">Export backup (JSON)</button></div>
+        <div class="list-row"><button class="btn link" data-export="csv">Export visits (CSV)</button></div>
+        <div class="list-row"><button class="btn link" data-import>Restore from backup…</button></div>
       </div>
+      <input type="file" id="import-file" accept="application/json,.json" hidden>
+      <p class="note">Your data lives only on this phone. Android also backs it up to your Google account if device backup is on.</p>
 
       <h3>About</h3>
       <p class="note">Wandermap works offline and collects no data. Map data: Natural Earth (public domain), US Census Bureau via us-atlas.
       Country data: mledoze/countries (ODbL). Includes d3-geo, topojson-client (ISC) and qrcode-generator (MIT).</p>
-      <p class="note"><button class="btn link" data-onboard>Run first-time setup again</button></p>`;
+      <div class="list" style="margin-top:0.75rem"><div class="list-row"><button class="btn link" data-onboard>Run first-time setup again</button></div></div>`;
 
     const root = $("#profile");
     $$("[data-switch]", root).forEach((b) =>
@@ -1283,20 +1407,24 @@
       for (const ct of Core.continentList(model)) {
         const list = COUNTRIES.filter((c) => Core.continentOf(c, model) === ct.id && (c.un || state.settings.countTerritories) && (!q || c.name.toLowerCase().includes(q)));
         if (!list.length) continue;
-        html += `<div class="group-h" style="padding-left:16px">${ct.name}</div><div class="onboard-grid">${list
+        html += `<div class="group-h">${ct.name}</div><div class="onboard-grid">${list
           .map((c) => `<button data-id="${c.id}" class="${(onlyOne ? home === c.id : picked.has(c.id)) ? "on" : ""}"><span>${c.flag}</span>${esc(c.name)}</button>`)
           .join("")}</div>`;
       }
       return html || `<div class="empty">No matches</div>`;
     };
     openScreen({
-      html: `<div class="screen-h"><h2 id="ob-title"></h2><button class="btn link" data-skip>Skip</button></div>
-        <div style="padding:10px 16px"><input type="search" id="ob-search" placeholder="Search countries"></div>
+      html: `<div class="screen-h"><span style="flex:1"></span><button class="btn link" data-skip style="padding:0 0.75rem">Skip</button></div>
+        <h1 class="large-title padded-x" id="ob-title" style="padding-top:0"></h1>
+        <p class="onboard-intro" id="ob-intro"></p>
+        <div style="padding:0 1rem 0.5rem"><input type="search" id="ob-search" placeholder="Search countries" aria-label="Search countries"></div>
         <div class="screen-body" id="ob-grid"></div>
         <div class="footer"><button class="btn primary" id="ob-next"></button></div>`,
       mount(root) {
         const draw = () => {
-          $("#ob-title", root).textContent = step === 1 ? "Where is home?" : `Where have you been? (${picked.size})`;
+          $("#ob-title", root).textContent = step === 1 ? "Where is home?" : "Where have you been?";
+          $("#ob-intro", root).textContent =
+            step === 1 ? "Pick your home country. You can change it later in Profile." : `${picked.size} selected. Tap every country you have visited; add dates later.`;
           $("#ob-next", root).textContent = step === 1 ? (home ? "Next" : "Skip this step") : "Done";
           $("#ob-grid", root).innerHTML = grid(step === 1);
         };
@@ -1386,6 +1514,7 @@
   currentAchievements = Core.evaluateAchievements(DATA, currentStats, state.visits, state.active, state.home);
   initMap();
   initPlaces();
+  Motion.watchSegs(document.body);
   renderCounter();
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", refresh);
   if (!state.onboarded) openOnboarding();

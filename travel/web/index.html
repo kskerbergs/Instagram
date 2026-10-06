@@ -13,15 +13,15 @@
     <section id="tab-map" class="tab active" aria-label="Map">
       <canvas id="map" aria-label="World map. Use the Places tab for a list of every country."></canvas>
       <div class="map-top">
-        <button id="counter" class="pill counter" aria-live="polite"></button>
-        <div class="seg small" role="tablist" aria-label="Map type">
+        <button id="counter" class="pill counter material" aria-live="polite"></button>
+        <div class="seg small material" role="tablist" aria-label="Map type">
           <button data-mode="flat" class="on">2D</button>
           <button data-mode="globe">3D</button>
         </div>
       </div>
       <div class="map-tools">
-        <button id="map-filter" class="fab" aria-label="Map filters">⚲</button>
-        <button id="map-reset" class="fab" aria-label="Reset view">⤢</button>
+        <button id="map-filter" class="fab material" aria-label="Map filters"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"/></svg></button>
+        <button id="map-reset" class="fab material" aria-label="Reset view"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="6"/></svg></button>
       </div>
       <div id="anim-label" class="anim-label" hidden></div>
       <div id="filter-bar" class="filter-bar" hidden></div>
@@ -30,7 +30,8 @@
 
     <!-- Places tab -->
     <section id="tab-places" class="tab" aria-label="Places">
-      <header class="bar">
+      <header class="bar material">
+        <h1 class="large-title">Places</h1>
         <div class="seg" id="places-kind" role="tablist">
           <button data-kind="country" class="on">Countries</button>
           <button data-kind="region">US states</button>
@@ -54,30 +55,30 @@
 
     <!-- Stats tab -->
     <section id="tab-stats" class="tab" aria-label="Statistics">
-      <div id="stats" class="scroll padded"></div>
+      <div class="scroll"><h1 class="large-title padded-x">Stats</h1><div id="stats" class="padded"></div></div>
     </section>
 
     <!-- Profile tab -->
     <section id="tab-profile" class="tab" aria-label="Profile and settings">
-      <div id="profile" class="scroll padded"></div>
+      <div class="scroll"><h1 class="large-title padded-x">Profile</h1><div id="profile" class="padded"></div></div>
     </section>
   </main>
 
-  <nav class="tabs" role="tablist">
-    <button data-tab="map" class="on"><span>🗺️</span>Map</button>
-    <button data-tab="places"><span>📋</span>Places</button>
-    <button data-tab="stats"><span>📊</span>Stats</button>
-    <button data-tab="profile"><span>👤</span>Profile</button>
+  <nav class="tabs material" role="tablist">
+    <button data-tab="map" class="on"><svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4 3 6.5v13L9 17l6 2.5 6-2.5V4l-6 2.5L9 4Z"/><path d="M9 4v13M15 6.5v13"/></svg>Map</button>
+    <button data-tab="places"><svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/></svg>Places</button>
+    <button data-tab="stats"><svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V11M10 20V4M16 20v-6M22 20H2"/></svg>Stats</button>
+    <button data-tab="profile"><svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>Profile</button>
   </nav>
 
   <!-- Shared Place sheet -->
   <div id="sheet-backdrop" class="backdrop" hidden></div>
   <div id="sheet" class="sheet" role="dialog" aria-modal="true" hidden>
-    <div class="grab"></div>
     <div id="sheet-body"></div>
   </div>
 
   <!-- Full-screen overlays: regional map, compare, share, onboarding -->
+  <div id="screen-scrim" class="scrim" hidden></div>
   <div id="screen" class="screen" hidden></div>
 
   <div id="toast" class="toast" role="status" hidden></div>
@@ -92,6 +93,7 @@
   <script src="data/globe.js"></script>
   <script src="data/us.js"></script>
   <script src="js/core.js"></script>
+  <script src="js/motion.js"></script>
   <script src="js/map.js"></script>
   <script src="js/app.js"></script>
 </body>
