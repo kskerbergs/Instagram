@@ -44,6 +44,22 @@
     return a.fill === b.fill && a.hatch === b.hatch;
   }
 
+  // A touch tap is followed by a synthetic "click" at the same spot. When a map tap opens the sheet,
+  // that click would land on whatever just appeared there (the backdrop, which closes the sheet, or a
+  // button in it). Swallow exactly that one click.
+  let swallowClickUntil = 0;
+  window.addEventListener(
+    "click",
+    (e) => {
+      if (performance.now() > swallowClickUntil) return;
+      swallowClickUntil = 0;
+      e.stopPropagation();
+      e.preventDefault();
+    },
+    true,
+  );
+  const swallowNextClick = () => (swallowClickUntil = performance.now() + 600);
+
   class MapView {
     // opts: { region: "world" | "US", style(id) -> {fill, hatch?}, onTap(id), onLongPress(id), theme() }
     constructor(canvas, opts) {
@@ -465,6 +481,7 @@
               const id = this.hit(...start.p);
               if (id && this.opts.onLongPress) {
                 moved = true; // swallow the tap
+                swallowNextClick();
                 setPressed(null);
                 this.opts.onLongPress(id);
               }
@@ -515,6 +532,7 @@
         }
         if (this.pointers.size > 0) return;
         if (!moved && start && e.type === "pointerup") {
+          swallowNextClick();
           const p = start.p;
           const now = performance.now();
           if (this.isGlobe() && now - lastTap < 300) {
