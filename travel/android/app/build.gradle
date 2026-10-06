@@ -10,8 +10,11 @@ android {
         applicationId "lv.wandermap"
         minSdk 26
         targetSdk 34
-        versionCode 1
-        versionName "1.0.0"
+        // Every CI build gets a higher version, so Android installs it as an update
+        // instead of offering to open the copy that is already installed.
+        def runNumber = (System.getenv("GITHUB_RUN_NUMBER") ?: "0").toInteger()
+        versionCode 100 + runNumber
+        versionName "1.0.${runNumber}"
     }
 
     // The app UI is the offline web app in travel/web.

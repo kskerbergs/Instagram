@@ -67,6 +67,9 @@ public class MainActivity extends Activity {
         s.setDomStorageEnabled(true);
         s.setAllowFileAccess(false);
         s.setAllowContentAccess(false);
+        // The app's files ship inside the APK; never serve an older cached copy after an update.
+        s.setCacheMode(WebSettings.LOAD_NO_CACHE);
+        clearCacheIfUpdated();
         // Follow the system font size, like Dynamic Type; the layout is in rem and scales with it.
         s.setTextZoom(Math.round(getResources().getConfiguration().fontScale * 100));
         web.setOverScrollMode(WebView.OVER_SCROLL_NEVER);
@@ -83,7 +86,11 @@ public class MainActivity extends Activity {
                     InputStream in = getAssets().open(path.substring(1));
                     String ext = path.substring(path.lastIndexOf('.') + 1);
                     String mime = MIME.containsKey(ext) ? MIME.get(ext) : "application/octet-stream";
-                    return new WebResourceResponse(mime, "utf-8", in);
+                    WebResourceResponse res = new WebResourceResponse(mime, "utf-8", in);
+                    Map<String, String> headers = new HashMap<>();
+                    headers.put("Cache-Control", "no-store");
+                    res.setResponseHeaders(headers);
+                    return res;
                 } catch (IOException e) {
                     return new WebResourceResponse("text/plain", "utf-8", 404, "Not found", null, null);
                 }
@@ -127,6 +134,24 @@ public class MainActivity extends Activity {
 
         pendingLink = linkFrom(getIntent());
         web.loadUrl(HOME);
+    }
+
+    /** Drops the WebView's cache the first time a new APK version starts. */
+    private void clearCacheIfUpdated() {
+        String current = versionName();
+        android.content.SharedPreferences prefs = getSharedPreferences("app", MODE_PRIVATE);
+        if (!current.equals(prefs.getString("cachedVersion", ""))) {
+            web.clearCache(true);
+            prefs.edit().putString("cachedVersion", current).apply();
+        }
+    }
+
+    private String versionName() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (android.content.pm.PackageManager.NameNotFoundException e) {
+            return "";
+        }
     }
 
     @Override
@@ -235,6 +260,11 @@ public class MainActivity extends Activity {
 
     /** Methods the page calls as window.WandermapNative.*. They run on a binder thread. */
     private class Bridge {
+        @JavascriptInterface
+        public String version() {
+            return versionName();
+        }
+
         @JavascriptInterface
         public void ready() {
             runOnUiThread(() -> {

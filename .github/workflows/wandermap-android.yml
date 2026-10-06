@@ -49,6 +49,6 @@ jobs:
           gh release delete wandermap-latest --yes --cleanup-tag || true
           gh release create wandermap-latest Wandermap.apk \
             --target "$GITHUB_SHA" \
-            --title "Wandermap for Android" \
-            --notes "Travel tracker. Download Wandermap.apk on your phone and open it to install." \
+            --title "Wandermap for Android 1.0.${{ github.run_number }}" \
+            --notes "Wandermap 1.0.${{ github.run_number }}. Download Wandermap.apk on your phone and open it to install; it updates the app already on your phone and keeps your data." \
             --latest=false

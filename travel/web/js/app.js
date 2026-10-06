@@ -1311,7 +1311,7 @@
       <p class="note">Your data lives only on this phone. Android also backs it up to your Google account if device backup is on.</p>
 
       <h3>About</h3>
-      <p class="note">Wandermap works offline and collects no data. Map data: Natural Earth (public domain), US Census Bureau via us-atlas.
+      <p class="note"><b>Version ${esc(Native?.version?.() || "web")}</b><br>Wandermap works offline and collects no data. Map data: Natural Earth (public domain), US Census Bureau via us-atlas.
       Country data: mledoze/countries (ODbL). Includes d3-geo, topojson-client (ISC) and qrcode-generator (MIT).</p>
       <div class="list" style="margin-top:0.75rem"><div class="list-row"><button class="btn link" data-onboard>Run first-time setup again</button></div></div>`;
 
