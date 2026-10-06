@@ -12,6 +12,40 @@
     return countries.filter((c) => (!c.geo || c.area < DOT_AREA_KM2) && c.lat != null && c.id !== "AQ");
   }
 
+  // The part of a country worth zooming to: its largest landmass, plus pieces that are close
+  // (or big and fairly close, like Alaska), without far-flung territories (Hawaii, French Guiana)
+  // and without points that wrap round past the 180° line to the other edge of the map.
+  const focusCache = new Map();
+  function focusGeo(id) {
+    if (focusCache.has(id)) return focusCache.get(id);
+    const f = worldFeatures.find((x) => x.id === id);
+    if (!f) return null;
+    const polys = f.geometry.type === "MultiPolygon" ? f.geometry.coordinates.map((c) => ({ type: "Polygon", coordinates: c })) : [f.geometry];
+    const area = polys.map((p) => d3.geoArea(p));
+    const mainIdx = area.indexOf(Math.max(...area));
+    const mc = d3.geoCentroid(polys[mainIdx]);
+    const keep = polys.filter((p, i) => {
+      if (i === mainIdx) return true;
+      const dist = (d3.geoDistance(d3.geoCentroid(p), mc) * 180) / Math.PI;
+      return dist <= 25 || (area[i] >= 0.15 * area[mainIdx] && dist <= 45);
+    });
+    const refLon = mc[0];
+    const points = [];
+    for (const p of keep)
+      for (const ring of p.coordinates)
+        for (const pt of ring) {
+          // Skip points on the far side of the antimeridian from the country's centre.
+          if (Math.sign(pt[0]) !== Math.sign(refLon) && Math.abs(pt[0]) > 90 && Math.abs(refLon) > 30) continue;
+          points.push(pt);
+        }
+    const geo = { type: "MultiPolygon", coordinates: keep.map((p) => p.coordinates) };
+    const centre = d3.geoCentroid(geo);
+    const radius = Math.max(...points.map((pt) => d3.geoDistance(pt, centre)));
+    const out = { points, centre, radius };
+    focusCache.set(id, out);
+    return out;
+  }
+
   function hatch(color, scale) {
     const s = 8;
     const c = document.createElement("canvas");
@@ -128,7 +162,12 @@
 
     globeProjection() {
       const r = Math.min(this.w, this.h) / 2 - 12;
-      return d3.geoOrthographic().rotate(this.rotate).scale(r * this.globeScale).translate([this.w / 2, this.h / 2]).clipAngle(90);
+      return d3
+        .geoOrthographic()
+        .rotate(this.rotate)
+        .scale(r * this.globeScale)
+        .translate([this.w / 2, this.h / 2 + (this.globeShift || 0)])
+        .clipAngle(90);
     }
 
     // Schedule a redraw; many changes in one frame (springs, gestures) still draw once.
@@ -461,10 +500,10 @@
       ];
     }
 
-    flyTo(id) {
+    flyTo(id, { centre, scale, shift = this.globeShift || 0 } = {}) {
       const c = this.opts.countries.find((x) => x.id === id);
-      const f = worldFeatures.find((x) => x.id === id);
-      const target = f ? d3.geoCentroid(f) : c ? [c.lon, c.lat] : null;
+      const g = focusGeo(id);
+      const target = centre || (g ? g.centre : c ? [c.lon, c.lat] : null);
       if (!target) return;
       this.stopMotion();
       const to = [-target[0], -target[1]];
@@ -474,7 +513,8 @@
       this.anims = [
         spring(this.rotate[0], to[0], (v) => (this.rotate = [v, this.rotate[1]])),
         spring(this.rotate[1], to[1], (v) => (this.rotate = [this.rotate[0], v])),
-        spring(this.globeScale, Math.max(2.5, this.globeScale), (v) => (this.globeScale = v), 0.001),
+        spring(this.globeScale, scale || Math.max(2.5, this.globeScale), (v) => (this.globeScale = v), 0.001),
+        spring(this.globeShift || 0, shift, (v) => (this.globeShift = v), 0.25),
       ];
     }
 
@@ -636,23 +676,42 @@
       if (!this.saved) this.saved = { k: this.k, tx: this.tx, ty: this.ty, rotate: this.rotate.slice(), globeScale: this.globeScale };
       this.selected = id;
       const fade = Motion.spring({ from: this.selectAmount || 0, to: 1, damping: 1, response: 0.3, precision: 0.002, onUpdate: (v) => ((this.selectAmount = v), this.render()) });
+      const areaTop = this.h * visibleTop + 70;
+      const areaH = this.h * (visibleBottom - visibleTop) - 90;
       if (this.isGlobe()) {
-        this.flyTo(id);
+        // Turn the globe to the country, size it to fit, and lift it into the space above the sheet.
+        const g = focusGeo(id);
+        const c = this.opts.countries.find((x) => x.id === id);
+        const centre = g ? g.centre : c ? [c.lon, c.lat] : null;
+        if (!centre) return void (this.anims = [fade]);
+        const r = Math.min(this.w, this.h) / 2 - 12;
+        const half = Math.min(this.w * 0.4, areaH * 0.45);
+        const ang = g ? Math.min(Math.PI / 2, Math.max(g.radius, 0.02)) : 0.05;
+        const scale = Math.max(1, Math.min(8, half / (r * Math.sin(ang))));
+        this.flyTo(id, { centre, scale, shift: areaTop + areaH / 2 - this.h / 2 });
         this.anims.push(fade);
         return;
       }
-      let box = this.flatPaths.find((f) => f.id === id && f.bounds)?.bounds;
+      let box = null;
+      if (this.region === "world") {
+        const g = focusGeo(id);
+        const pts = g ? g.points.map((pt) => this.flatProj(pt)).filter(Boolean) : [];
+        if (pts.length) {
+          const xs = pts.map((p) => p[0]);
+          const ys = pts.map((p) => p[1]);
+          box = [[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]];
+        }
+      }
+      box ||= this.flatPaths.find((f) => f.id === id && f.bounds)?.bounds;
       if (!box) {
         const d = this.flatDots.find((x) => x.id === id);
         if (!d) return void (this.anims = [fade]);
         box = [[d.p[0] - 3, d.p[1] - 3], [d.p[0] + 3, d.p[1] + 3]];
       }
       const [[x0, y0], [x1, y1]] = box;
-      const areaTop = this.h * visibleTop + 70;
-      const areaH = this.h * (visibleBottom - visibleTop) - 90;
-      // Never zoom out to show a place, and cap the zoom for tiny ones so the jump stays gentle.
-      const fit = Math.min((this.w * 0.72) / Math.max(1, x1 - x0), areaH / Math.max(1, y1 - y0));
-      const k = Math.max(this.k, Math.min(10, fit));
+      // Fit the whole place (zooming out for big ones like Russia), capped for tiny ones.
+      const fit = Math.min((this.w * 0.84) / Math.max(1, x1 - x0), areaH / Math.max(1, y1 - y0));
+      const k = Math.max(1, Math.min(10, fit));
       const anchor = [this.w / 2, areaTop + areaH / 2];
       const tx = anchor[0] - ((x0 + x1) / 2) * k;
       const ty = anchor[1] - ((y0 + y1) / 2) * k;
@@ -677,6 +736,8 @@
           onDone: () => (this.selected = null),
         }),
       ];
+      // The globe was lifted above the sheet; always let it back down.
+      if (this.globeShift) this.anims.push(go(this.globeShift, 0, (v) => (this.globeShift = v)));
       if (!s) return;
       if (this.isGlobe()) {
         this.anims.push(go(this.globeScale, s.globeScale, (v) => (this.globeScale = v)));
