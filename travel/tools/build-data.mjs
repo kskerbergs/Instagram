@@ -4,6 +4,8 @@ import { readFileSync, writeFileSync, copyFileSync, existsSync } from "node:fs";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
+const d3 = require("d3-geo");
+const topojson = require("topojson-client");
 const out = new URL("../web/", import.meta.url);
 const json = (p) => JSON.parse(readFileSync(require.resolve(p), "utf8"));
 
@@ -17,14 +19,67 @@ const world110 = json("world-atlas/countries-110m.json");
 const NAME_TO_ISO2 = { Kosovo: "XK" };
 const byNum = new Map(wc.map((c) => [c.ccn3, c]));
 const byIso2 = new Map(wc.map((c) => [c.cca2, c]));
+// Natural Earth draws some overseas territories as part of the governing country, so they lit up
+// with it (tap France, and French Guiana and Réunion highlight too). The app lists them as places of
+// their own, so their polygons are split out here. Only each country's own territories are
+// candidates; a polygon moves when it is near the territory, far from the mainland (> 8°) and about
+// the territory's size.
+const OVERSEAS = {
+  FR: ["GF", "GP", "MQ", "RE", "YT"], // French Guiana, Guadeloupe, Martinique, Réunion, Mayotte
+  NO: ["SJ"], // Svalbard and Jan Mayen
+  NL: ["BQ"], // Bonaire, Sint Eustatius, Saba (spread out: 8° reach)
+  NZ: ["TK"], // Tokelau
+};
+const REACH = { SJ: 4, BQ: 8 };
+// world-countries gives -1 (unknown) for some areas; Svalbard and Jan Mayen is 61,022 km².
+const AREA_FALLBACK = { SJ: 61022 };
+
 const geomIds = new Set();
-for (const g of [...world.objects.countries.geometries, ...world110.objects.countries.geometries]) {
-  const c = byNum.get(g.id) || byIso2.get(NAME_TO_ISO2[g.properties.name]);
-  // Unassigned features (e.g. Siachen Glacier) stay as plain grey land.
-  g.id = c ? c.cca2 : null;
-  g.properties = {};
-  if (c) geomIds.add(c.cca2);
+const log = [];
+for (const topo of [world, world110]) {
+  for (const g of topo.objects.countries.geometries) {
+    const c = byNum.get(g.id) || byIso2.get(NAME_TO_ISO2[g.properties.name]);
+    // Unassigned features (e.g. Siachen Glacier) stay as plain grey land.
+    g.id = c ? c.cca2 : null;
+    g.properties = {};
+  }
+  splitOverseasTerritories(topo);
+  for (const g of topo.objects.countries.geometries) if (g.id) geomIds.add(g.id);
 }
+
+function splitOverseasTerritories(topo) {
+  const geoms = topo.objects.countries.geometries;
+  const drawn = new Set(geoms.map((g) => g.id));
+  const KM2 = 6371 * 6371;
+  const moved = new Map();
+  for (const g of geoms) {
+    const candidates = (OVERSEAS[g.id] || []).filter((id) => !drawn.has(id)).map((id) => byIso2.get(id));
+    if (!candidates.length || g.type !== "MultiPolygon") continue;
+    const polys = g.arcs.map((arcs) => topojson.feature(topo, { type: "Polygon", arcs }));
+    const areas = polys.map((p) => d3.geoArea(p));
+    const main = d3.geoCentroid(polys[areas.indexOf(Math.max(...areas))]);
+    const keep = [];
+    g.arcs.forEach((arcs, i) => {
+      const centre = d3.geoCentroid(polys[i]);
+      const farFromMainland = (d3.geoDistance(centre, main) * 180) / Math.PI > 8;
+      let best = null;
+      for (const t of candidates) {
+        const d = (d3.geoDistance(centre, [t.latlng[1], t.latlng[0]]) * 180) / Math.PI;
+        const area = t.area > 0 ? t.area : AREA_FALLBACK[t.cca2] || 0;
+        const sizeOk = areas[i] * KM2 <= Math.max(3 * area, 2000);
+        if (farFromMainland && sizeOk && d <= (REACH[t.cca2] || 2.5) && (!best || d < best.d)) best = { t, d };
+      }
+      if (best) {
+        if (!moved.has(best.t.cca2)) moved.set(best.t.cca2, []);
+        moved.get(best.t.cca2).push(arcs);
+        log.push(`${best.t.cca2} from ${g.id}`);
+      } else keep.push(arcs);
+    });
+    g.arcs = keep;
+  }
+  for (const [id, arcs] of moved) geoms.push({ type: "MultiPolygon", id, arcs, properties: {} });
+}
+
 delete world110.objects.land;
 
 const NORTH_AMERICA = new Set(["North America", "Central America", "Caribbean"]);
@@ -101,4 +156,5 @@ for (const f of ["d3-array/dist/d3-array.min.js", "d3-geo/dist/d3-geo.min.js",
   "qrcode-generator/dist/qrcode.js"]) {
   copyFileSync(new URL("node_modules/" + f, import.meta.url), new URL("vendor/" + f.split("/").pop(), out));
 }
+console.log("Split out overseas territories:", [...new Set(log)].join(", "));
 console.log(`${countries.length} countries (${countries.filter((c) => c.un).length} UN), ${regions.length} US regions`);
