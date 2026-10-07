@@ -12,6 +12,44 @@
     return countries.filter((c) => (!c.geo || c.area < DOT_AREA_KM2) && c.lat != null && c.id !== "AQ");
   }
 
+  // ---- Labels ---------------------------------------------------------------------
+  function largestPolygon(f) {
+    if (f.geometry.type !== "MultiPolygon") return f.geometry;
+    let best = null;
+    let bestArea = -1;
+    for (const c of f.geometry.coordinates) {
+      const p = { type: "Polygon", coordinates: c };
+      const a = d3.geoArea(p);
+      if (a > bestArea) [best, bestArea] = [p, a];
+    }
+    return best;
+  }
+  const globeMain = new Map(globeFeatures.filter((f) => f.id).map((f) => [f.id, largestPolygon(f)]));
+  const globeAnchor = new Map([...globeMain].map(([id, p]) => [id, d3.geoCentroid(p)]));
+
+  const widthCache = new Map();
+  function textWidth(ctx, text, size) {
+    const key = size + "|" + text;
+    if (!widthCache.has(key)) {
+      ctx.font = labelFont(size);
+      widthCache.set(key, ctx.measureText(text).width);
+    }
+    return widthCache.get(key);
+  }
+  const labelFont = (size) => `600 ${size}px system-ui, -apple-system, Roboto, sans-serif`;
+
+  // One line if it fits, otherwise two lines split at the space nearest the middle.
+  function layouts(ctx, name, size) {
+    const out = [{ lines: [name], w: textWidth(ctx, name, size), h: size * 1.15 }];
+    const spaces = [...name.matchAll(/ /g)].map((m) => m.index);
+    if (spaces.length) {
+      const mid = spaces.reduce((a, b) => (Math.abs(b - name.length / 2) < Math.abs(a - name.length / 2) ? b : a));
+      const lines = [name.slice(0, mid), name.slice(mid + 1)];
+      out.push({ lines, w: Math.max(...lines.map((l) => textWidth(ctx, l, size))), h: size * 2.3 });
+    }
+    return out;
+  }
+
   // The part of a country worth zooming to: its largest landmass, plus pieces that are close
   // (or big and fairly close, like Alaska), without far-flung territories (Hawaii, French Guiana)
   // and without points that wrap round past the 180° line to the other edge of the map.
@@ -136,6 +174,7 @@
       this.dpr = dpr;
       this.canvas.width = Math.round(r.width * dpr);
       this.canvas.height = Math.round(r.height * dpr);
+      this.blockers = this.opts.blockers ? this.opts.blockers() : [];
       this.buildFlat();
       this.render();
     }
@@ -152,6 +191,20 @@
         return { id: f.id, path: d ? new Path2D(d) : null, bounds: d ? path.bounds(f) : null };
       });
       this.flatDots = this.dots.map((c) => ({ id: c.id, p: this.flatProj([c.lon, c.lat]) })).filter((d) => d.p);
+      // Label anchors: the centre of each place's largest landmass, if that falls inside it.
+      const byId = new Map(this.flatPaths.filter((f) => f.id && f.path).map((f) => [f.id, f]));
+      this.labels = [];
+      for (const f of this.region === "US" ? usFeatures : worldFeatures) {
+        const fp = byId.get(f.id);
+        if (!fp || f.id === "AQ") continue;
+        const main = largestPolygon(f);
+        const b = path.bounds(main);
+        if (!isFinite(b[0][0])) continue;
+        let p = this.flatProj(d3.geoCentroid(main));
+        if (!p || !this.hitCtx.isPointInPath(fp.path, p[0], p[1])) p = [(b[0][0] + b[1][0]) / 2, (b[0][1] + b[1][1]) / 2];
+        if (!this.hitCtx.isPointInPath(fp.path, p[0], p[1])) continue;
+        this.labels.push({ id: f.id, x: p[0], y: p[1], path: fp.path, w: b[1][0] - b[0][0] });
+      }
       this.sphere = this.region === "world" ? new Path2D(path({ type: "Sphere" })) : null;
       this.content = path.bounds(this.region === "world" ? { type: "Sphere" } : fc);
       const first = !this.viewInit;
@@ -239,6 +292,7 @@
       }
       ctx.restore();
       this.drawDots(this.flatDots.map((d) => ({ id: d.id, x: d.p[0] * k + this.tx, y: d.p[1] * k + this.ty })), theme);
+      this.drawFlatLabels(theme);
     }
 
     drawGlobe(theme) {
@@ -306,6 +360,7 @@
           return { id: c.id, x: p[0], y: p[1] };
         });
       this.drawDots(dots, theme);
+      this.drawGlobeLabels(theme, proj);
     }
 
     drawDots(dots, theme) {
@@ -324,6 +379,82 @@
         ctx.lineWidth = ring ? 3 : 1;
         ctx.strokeStyle = ring ? theme.text : theme.dotStroke;
         ctx.stroke();
+      }
+    }
+
+    // ---- Country names ---------------------------------------------------------
+    // A name appears once it fits inside its country (checked against the real outline, not just
+    // the bounding box, so it never spills into a neighbour), fading in as there is room to spare.
+    placeLabel(name, sx, sy, room, inside) {
+      const size = room > 300 ? 15 : room > 160 ? 13 : 11.5;
+      for (const L of layouts(this.ctx, name, size)) {
+        if (L.w > room * 0.92) continue;
+        const hw = L.w / 2 + 2;
+        const hh = L.h / 2;
+        // Whole name on screen and clear of floating controls, or not at all.
+        const box = [sx - hw, sy - hh, sx + hw, sy + hh];
+        if (box[0] < 4 || box[1] < 4 || box[2] > this.w - 4 || box[3] > this.h - 4) continue;
+        if ((this.blockers || []).some((r) => box[0] < r[2] && box[2] > r[0] && box[1] < r[3] && box[3] > r[1])) continue;
+        const probes = [[0, 0], [-hw, 0], [hw, 0], [0, -hh], [0, hh], [-hw, -hh], [hw, -hh], [-hw, hh], [hw, hh]];
+        if (probes.every(([dx, dy]) => inside(sx + dx, sy + dy))) return { ...L, size, alpha: Math.min(1, (room * 0.92 - L.w) / 28) };
+      }
+      return null;
+    }
+
+    paintLabel(L, id, sx, sy, theme) {
+      const { ctx } = this;
+      const st = this.opts.style(id);
+      const onColour = st.fill && st.fill !== theme.unvisited;
+      ctx.save();
+      ctx.globalAlpha = L.alpha;
+      ctx.font = labelFont(L.size);
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      if ("letterSpacing" in ctx) ctx.letterSpacing = L.size < 13 ? "0.2px" : "0px";
+      ctx.fillStyle = onColour ? "rgba(255,255,255,0.95)" : theme.label;
+      const lh = L.size * 1.15;
+      L.lines.forEach((line, i) => ctx.fillText(line, sx, sy + (i - (L.lines.length - 1) / 2) * lh));
+      ctx.restore();
+    }
+
+    drawFlatLabels(theme) {
+      if (!this.opts.label || !this.labels) return;
+      const { k } = this;
+      for (const lab of this.labels) {
+        const room = lab.w * k;
+        if (room < 40) continue;
+        const sx = lab.x * k + this.tx;
+        const sy = lab.y * k + this.ty;
+        if (sx < -room || sx > this.w + room || sy < -30 || sy > this.h + 30) continue;
+        const name = this.opts.label(lab.id);
+        if (!name) continue;
+        const inside = (x, y) => this.hitCtx.isPointInPath(lab.path, (x - this.tx) / k, (y - this.ty) / k);
+        const L = this.placeLabel(name, sx, sy, room, inside);
+        if (L) this.paintLabel(L, lab.id, sx, sy, theme);
+      }
+    }
+
+    drawGlobeLabels(theme, proj) {
+      if (!this.opts.label) return;
+      const centre = [-this.rotate[0], -this.rotate[1]];
+      const path = d3.geoPath(proj);
+      for (const [id, anchor] of globeAnchor) {
+        if (d3.geoDistance(anchor, centre) > 1.25) continue; // near the rim names would be squashed
+        const main = globeMain.get(id);
+        const b = path.bounds(main);
+        const room = b[1][0] - b[0][0];
+        if (!(room >= 40)) continue;
+        const p = proj(anchor);
+        if (!p) continue;
+        const name = this.opts.label(id);
+        if (!name) continue;
+        let shape = null;
+        const inside = (x, y) => {
+          shape ||= new Path2D(path(main) || "");
+          return this.hitCtx.isPointInPath(shape, x, y);
+        };
+        const L = this.placeLabel(name, p[0], p[1], room, inside);
+        if (L) this.paintLabel(L, id, p[0], p[1], theme);
       }
     }
 

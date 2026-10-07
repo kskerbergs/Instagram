@@ -165,6 +165,7 @@
       bg: v("--bg"),
       surface: v("--surface"),
       select: v("--map-select"),
+      label: v("--map-label"),
     };
   }
   let theme = null;
@@ -367,6 +368,16 @@
       countries: COUNTRIES,
       theme: () => theme,
       style: (id) => faded("country:" + id, countryStyle(id)),
+      label: (id) => COUNTRY.get(id)?.name,
+      // Screen areas covered by floating controls; names are not drawn underneath them.
+      blockers: () => {
+        const c = $("#map").getBoundingClientRect();
+        return [".map-top > *", ".map-tools", ".tabs", ".map-hint"]
+          .flatMap((sel) => $$(sel))
+          .map((el) => el.getBoundingClientRect())
+          .filter((r) => r.width)
+          .map((r) => [r.left - c.left - 6, r.top - c.top - 6, r.right - c.left + 6, r.bottom - c.top + 6]);
+      },
       onTap: (id) => {
         if (ui.anim) return stopAnimation();
         openSheet("country", id);
@@ -616,6 +627,31 @@
     $("[data-open-us]", el)?.addEventListener("click", () => openRegionMap("US"));
   }
 
+  // Who a non-UN place belongs to, so "French Guiana" reads as part of France, not a country.
+  const TERRITORY_NOTES = [
+    [["GF", "GP", "MQ", "RE", "YT"], "Part of France (overseas region)"],
+    [["PF", "NC", "PM", "BL", "MF", "WF", "TF"], "French overseas territory"],
+    [["SJ"], "Part of Norway"],
+    [["BV"], "Norwegian dependency"],
+    [["BQ"], "Part of the Netherlands"],
+    [["AW", "CW", "SX"], "Kingdom of the Netherlands"],
+    [["GL", "FO"], "Kingdom of Denmark"],
+    [["AX"], "Part of Finland"],
+    [["PR", "GU", "VI", "AS", "MP", "UM"], "US territory"],
+    [["HK", "MO"], "China (special administrative region)"],
+    [["TK"], "New Zealand territory"],
+    [["CK", "NU"], "Self-governing, in free association with New Zealand"],
+    [["BM", "KY", "VG", "AI", "MS", "TC", "FK", "GI", "SH", "IO", "PN", "GS"], "British overseas territory"],
+    [["IM", "JE", "GG"], "British Crown dependency"],
+    [["CX", "CC", "NF", "HM"], "Australian external territory"],
+    [["EH"], "Disputed territory"],
+    [["XK", "TW"], "Not a UN member"],
+  ];
+  function territoryNote(id) {
+    const hit = TERRITORY_NOTES.find(([ids]) => ids.includes(id));
+    return hit ? hit[1] : "Territory";
+  }
+
   // ---- Place sheet ---------------------------------------------------------------
   // Zoom the map to the place in the space left above the sheet.
   function focusOn(map, id) {
@@ -658,7 +694,7 @@
     if (type === "country") {
       const c = COUNTRY.get(id);
       const cont = Core.continentList(state.settings.continentModel).find((x) => x.id === Core.continentOf(c, state.settings.continentModel));
-      sub = `${cont ? cont.name : ""}${c.un ? "" : " · territory"}`;
+      sub = `${cont ? cont.name : ""}${c.un ? "" : " · " + esc(territoryNote(id))}`;
       const regs = REGIONS.filter((r) => r.country === id);
       if (regs.length) {
         const r = currentStats.regions[id];
@@ -830,6 +866,7 @@
           countries: COUNTRIES,
           theme: () => theme,
           style: (id) => faded("region:" + id, regionStyle(id)),
+          label: (id) => REGION.get(id)?.name,
           onTap: (id) => {
             openSheet("region", id);
             focusOn(regionMap, id);
